@@ -157,3 +157,7 @@ body.has-compile-bar .tab-panel { padding-bottom: 140px; }
 .compil video { width: 100%; aspect-ratio: 16/9; background: #000; display: block; }
 .compil .body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .compil .clips-in { font-size: 12px; color: var(--muted); }
+
+.compile-pill { position: fixed; right: 20px; bottom: 20px; z-index: 20; background: var(--accent); color: #fff; border: none;
+  border-radius: 999px; padding: 10px 16px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+.compile-pill:hover { background: #ff3358; }

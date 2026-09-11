@@ -417,6 +417,7 @@ function saveSelection() {
 function toggleSelect(c) {
   if (selection.has(c.id)) selection.delete(c.id); else selection.set(c.id, c);
   saveSelection(); renderCompileBar();
+  if (!selection.has(c.id) && selection.size === 0) setCompileCollapsed(false);
   const card = document.querySelector(`.clip[data-id="${c.id}"]`);
   if (card) {
     card.classList.toggle('selected', selection.has(c.id));
@@ -439,14 +440,28 @@ function moveInSelection(id, delta) {
   selection.clear(); items.forEach(([k, v]) => selection.set(k, v));
   saveSelection(); renderCompileBar();
 }
+// Volet replié → petite pastille en bas à droite (état mémorisé)
+let compileCollapsed = false;
+try { compileCollapsed = localStorage.getItem('compileCollapsed') === '1'; } catch (_) { /* ignore */ }
+function setCompileCollapsed(v) {
+  compileCollapsed = v;
+  try { localStorage.setItem('compileCollapsed', v ? '1' : '0'); } catch (_) { /* ignore */ }
+  renderCompileBar();
+}
+$('#compile-collapse').addEventListener('click', () => setCompileCollapsed(true));
+$('#compile-pill').addEventListener('click', () => setCompileCollapsed(false));
+
 function renderCompileBar() {
   const items = [...selection.values()];
-  const bar = $('#compile-bar');
-  bar.hidden = items.length === 0;
-  document.body.classList.toggle('has-compile-bar', items.length > 0);
+  const bar = $('#compile-bar'), pill = $('#compile-pill');
+  bar.hidden = items.length === 0 || compileCollapsed;
+  pill.hidden = items.length === 0 || !compileCollapsed;
+  document.body.classList.toggle('has-compile-bar', !bar.hidden);
   if (!items.length) return;
   const total = items.reduce((a, c) => a + (c.duration || 0), 0);
-  $('#compile-summary').textContent = `${items.length} clip${items.length > 1 ? 's' : ''} · ${total.toFixed(1)} s`;
+  const summary = `${items.length} clip${items.length > 1 ? 's' : ''} · ${total.toFixed(1)} s`;
+  $('#compile-summary').textContent = summary;
+  pill.textContent = `🎬 ${summary} ▴`;
   $('#compile-list').replaceChildren(...items.map((c, i) => el('li', {},
     el('span', { class: 'n' }, `${i + 1}.`),
     el('span', { class: 't' }, c.title),
