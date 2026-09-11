@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meme Extract</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>🎬 Meme Extract</h1>
+    <nav class="tabs">
+      <button class="tab active" data-tab="add">Ajouter un clip</button>
+      <button class="tab" data-tab="library">Bibliothèque <span id="lib-count" class="badge"></span></button>
+    </nav>
+  </header>
+
+  <!-- ============================ AJOUTER ============================ -->
+  <main id="tab-add" class="tab-panel active">
+    <section class="card">
+      <h2>1. La vidéo source</h2>
+      <form id="url-form" class="row">
+        <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=…" required autocomplete="off">
+        <button type="submit" id="btn-load">Charger</button>
+      </form>
+      <p id="url-error" class="error" hidden></p>
+      <div id="source" hidden>
+        <div class="source-meta">
+          <img id="source-thumb" alt="">
+          <div>
+            <div id="source-title" class="source-title"></div>
+            <div class="muted"><span id="source-duration"></span> · <span id="source-extractor"></span></div>
+          </div>
+        </div>
+        <div id="player-wrap" hidden>
+          <div id="player"></div>
+          <p class="muted small">Utilise le lecteur pour repérer le passage, puis clique sur « ⏱ Position actuelle » pour remplir le début et la fin. Touches : <kbd>I</kbd> = début, <kbd>O</kbd> = fin, <kbd>Espace</kbd> = lecture/pause, <kbd>←</kbd>/<kbd>→</kbd> = ±1 s, <kbd>Maj</kbd>+<kbd>←</kbd>/<kbd>→</kbd> = ±0,1 s.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="section-cut" hidden>
+      <h2>2. Le passage à extraire</h2>
+      <div class="grid-2">
+        <label>Début
+          <div class="row">
+            <input id="start" placeholder="0:12" autocomplete="off">
+            <button type="button" class="ghost" data-mark="start" title="Prendre la position du lecteur (I)">⏱ Position actuelle</button>
+          </div>
+        </label>
+        <label>Fin
+          <div class="row">
+            <input id="end" placeholder="0:18" autocomplete="off">
+            <button type="button" class="ghost" data-mark="end" title="Prendre la position du lecteur (O)">⏱ Position actuelle</button>
+          </div>
+        </label>
+      </div>
+      <div class="row">
+        <span id="cut-duration" class="muted"></span>
+        <button type="button" class="ghost" id="btn-preview" title="Lire le passage dans le lecteur">▶ Prévisualiser le passage</button>
+      </div>
+    </section>
+
+    <section class="card" id="section-tags" hidden>
+      <h2>3. Titre et tags</h2>
+      <label>Titre du clip
+        <input id="title" placeholder="ex : Le mec qui tombe de la chaise" autocomplete="off">
+      </label>
+      <label>Tags <span class="muted small">(Entrée ou virgule pour valider — le 1er tag donne le dossier)</span>
+        <div id="tag-editor" class="tag-editor">
+          <div id="tag-chips" class="chips"></div>
+          <input id="tag-input" placeholder="drôle, triste, wtf…" autocomplete="off" list="tag-suggestions">
+          <button type="button" class="icon" id="tag-add" title="Ajouter ce tag">+</button>
+          <datalist id="tag-suggestions"></datalist>
+        </div>
+      </label>
+      <div id="quick-tags" class="chips quick"></div>
+      <p id="submit-error" class="error" hidden></p>
+      <button id="btn-submit" class="primary big">⬇ Extraire et télécharger</button>
+    </section>
+
+    <section class="card" id="section-queue" hidden>
+      <h2>File d'extraction</h2>
+      <ul id="queue" class="queue"></ul>
+    </section>
+  </main>
+
+  <!-- ========================== BIBLIOTHÈQUE ========================== -->
+  <main id="tab-library" class="tab-panel">
+    <section class="card">
+      <div class="row wrap">
+        <input id="search" type="search" placeholder="Rechercher dans les titres et projets…" autocomplete="off">
+        <select id="sort" title="Tri">
+          <option value="date:desc">Plus récents</option>
+          <option value="date:asc">Plus anciens</option>
+          <option value="uses:desc">Plus utilisés</option>
+          <option value="uses:asc">Jamais / peu utilisés</option>
+          <option value="duration:asc">Plus courts</option>
+          <option value="duration:desc">Plus longs</option>
+          <option value="title:asc">Titre A → Z</option>
+        </select>
+        <label class="inline"><input type="checkbox" id="only-done" checked> Prêts seulement</label>
+        <button class="ghost" id="btn-refresh" title="Rafraîchir">↻</button>
+      </div>
+      <div id="tag-filter" class="chips filter"></div>
+      <p class="muted small filter-help">Clique sur un tag pour l'<b>exiger</b> (rose), une 2ᵉ fois pour l'<b>exclure</b> (barré), une 3ᵉ fois pour l'oublier. Plusieurs tags exigés = tous requis.</p>
+      <details class="manage-tags">
+        <summary>Gérer les tags</summary>
+        <form id="new-tag-form" class="row">
+          <input id="new-tag" placeholder="nouveau tag (ex : gêne, hype, rage)" autocomplete="off">
+          <button type="submit">+ Créer</button>
+        </form>
+        <p class="muted small">Les tags sans clip peuvent être supprimés ici. Un tag utilisé se retire depuis la fiche du clip (✎).</p>
+        <div id="tag-manage-list" class="chips"></div>
+      </details>
+      <details class="manage-tags">
+        <summary>Partager la bibliothèque (export / import)</summary>
+        <div class="row wrap share-row">
+          <a class="btn" href="/api/export" download>⬇ Exporter (JSON léger)</a>
+          <a class="btn" href="/api/export?files=1" download>⬇ Exporter avec les vidéos (ZIP)</a>
+          <label class="btn file-btn">⬆ Importer un export…<input type="file" id="import-file" accept=".json,.zip,application/json,application/zip" hidden></label>
+        </div>
+        <p class="muted small">Le JSON ne contient que les liens, bornes et tags : la personne qui l'importe re-télécharge les clips depuis YouTube. Le ZIP inclut les fichiers vidéo. Les doublons (même vidéo, mêmes bornes) sont ignorés à l'import.</p>
+        <p id="import-result" class="small" hidden></p>
+      </details>
+    </section>
+    <p id="lib-empty" class="muted center" hidden>Aucun clip pour ce filtre.</p>
+    <div id="clips" class="clips-grid"></div>
+    <datalist id="project-suggestions"></datalist>
+  </main>
+
+  <!-- Modale d'édition -->
+  <dialog id="edit-dialog">
+    <form method="dialog" class="card" id="edit-form">
+      <h2>Modifier le clip</h2>
+      <label>Titre <input id="edit-title" autocomplete="off"></label>
+      <label>Tags
+        <div class="tag-editor">
+          <div id="edit-chips" class="chips"></div>
+          <input id="edit-tag-input" autocomplete="off" list="tag-suggestions" placeholder="ajouter un tag…">
+          <button type="button" class="icon" id="edit-tag-add" title="Ajouter ce tag">+</button>
+        </div>
+      </label>
+      <div class="row right">
+        <button type="button" class="ghost" id="edit-cancel">Annuler</button>
+        <button type="submit" class="primary">Enregistrer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
