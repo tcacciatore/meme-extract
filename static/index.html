@@ -124,10 +124,52 @@
         <p id="import-result" class="small" hidden></p>
       </details>
     </section>
+    <section class="card" id="compil-section">
+      <details id="compil-details">
+        <summary>Compilations <span id="compil-count" class="badge"></span></summary>
+        <p class="muted small">Sélectionne des clips avec « ＋ Compil » sur leurs cartes, puis lis-les à la suite ou assemble-les en une seule vidéo (1080p, 30 fps).</p>
+        <div id="compilations" class="compil-list"></div>
+      </details>
+    </section>
     <p id="lib-empty" class="muted center" hidden>Aucun clip pour ce filtre.</p>
+    <div class="row wrap select-row">
+      <button class="ghost small-btn" id="btn-select-all">☑ Tout sélectionner (filtre courant)</button>
+    </div>
     <div id="clips" class="clips-grid"></div>
     <datalist id="project-suggestions"></datalist>
   </main>
+
+  <!-- Barre de sélection (compilation) -->
+  <div id="compile-bar" class="compile-bar" hidden>
+    <div class="compile-head">
+      <strong id="compile-summary"></strong>
+      <button class="ghost small-btn" id="compile-toggle-list">Ordonner ▾</button>
+      <span class="spacer"></span>
+      <button class="primary" id="compile-play">▶ Lire à la suite</button>
+      <form id="compile-form" class="row">
+        <input id="compile-title" placeholder="Nom de la compilation" autocomplete="off">
+        <button type="submit">🎬 Compiler en une vidéo</button>
+      </form>
+      <button class="ghost small-btn danger" id="compile-clear">Vider</button>
+    </div>
+    <ol id="compile-list" class="compile-list" hidden></ol>
+  </div>
+
+  <!-- Lecteur enchaîné -->
+  <div id="playlist-overlay" class="overlay" hidden>
+    <div class="overlay-box">
+      <div class="overlay-head">
+        <span id="playlist-pos" class="muted"></span>
+        <strong id="playlist-title"></strong>
+        <span class="spacer"></span>
+        <label class="inline small"><input type="checkbox" id="playlist-loop"> Boucle</label>
+        <button class="icon" id="playlist-prev" title="Précédent (←)">⏮</button>
+        <button class="icon" id="playlist-next" title="Suivant (→)">⏭</button>
+        <button class="icon" id="playlist-close" title="Fermer (Échap)">✕</button>
+      </div>
+      <video id="playlist-video" controls autoplay></video>
+    </div>
+  </div>
 
   <!-- Modale d'édition -->
   <dialog id="edit-dialog">

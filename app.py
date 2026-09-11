@@ -79,6 +79,16 @@ def init_db():
                 id   INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE
             );
+            CREATE TABLE IF NOT EXISTS compilations (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                title      TEXT NOT NULL,
+                clip_ids   TEXT NOT NULL,
+                path       TEXT,
+                duration   REAL,
+                status     TEXT NOT NULL DEFAULT 'pending',
+                error      TEXT,
+                created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS usages (
                 id      INTEGER PRIMARY KEY AUTOINCREMENT,
                 clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
@@ -98,6 +108,10 @@ def init_db():
         conn.execute(
             "UPDATE clips SET status='error', error='Interrompu (serveur redémarré)' "
             "WHERE status IN ('pending','downloading')"
+        )
+        conn.execute(
+            "UPDATE compilations SET status='error', error='Interrompu (serveur redémarré)' "
+            "WHERE status IN ('pending','building')"
         )
 
 
@@ -376,6 +390,122 @@ def run_download(clip_id: int):
             conn.execute("UPDATE clips SET status='error', error=? WHERE id = ?", (msg, clip_id))
     finally:
         set_progress(clip_id, None)
+
+
+# ------------------------------------------------------------- compilations
+
+COMPIL_DIR_NAME = "_compilations"
+COMPIL_W, COMPIL_H, COMPIL_FPS = 1920, 1080, 30
+
+
+def ffprobe_info(path: Path) -> dict:
+    """Durée et présence d'une piste audio."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type:format=duration", "-of", "json", str(path)],
+        capture_output=True, text=True, timeout=60,
+    ).stdout
+    data = json.loads(out or "{}")
+    return {
+        "duration": float((data.get("format") or {}).get("duration") or 0),
+        "audio": any(st.get("codec_type") == "audio" for st in data.get("streams", [])),
+    }
+
+
+def compilation_to_dict(conn, row) -> dict:
+    ids = json.loads(row["clip_ids"])
+    titles = {}
+    if ids:
+        marks = ",".join("?" * len(ids))
+        for r in conn.execute(f"SELECT id, title FROM clips WHERE id IN ({marks})", ids):
+            titles[r["id"]] = r["title"]
+    with PROGRESS_LOCK:
+        progress = PROGRESS.get(("compil", row["id"]))
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "clip_ids": ids,
+        "clips": [{"id": i, "title": titles.get(i, "(clip supprimé)")} for i in ids],
+        "path": row["path"],
+        "media_url": f"/media/{row['path']}" if row["path"] else None,
+        "duration": row["duration"],
+        "status": row["status"],
+        "error": row["error"],
+        "progress": progress,
+        "created_at": row["created_at"],
+    }
+
+
+def build_compilation(comp_id: int):
+    key = ("compil", comp_id)
+    with db() as conn:
+        row = conn.execute("SELECT * FROM compilations WHERE id = ?", (comp_id,)).fetchone()
+        if not row:
+            return
+        ids = json.loads(row["clip_ids"])
+        marks = ",".join("?" * len(ids))
+        found = {r["id"]: r for r in conn.execute(f"SELECT id, path, status FROM clips WHERE id IN ({marks})", ids)}
+        conn.execute("UPDATE compilations SET status='building' WHERE id = ?", (comp_id,))
+
+    out_dir = CLIPS_DIR / COMPIL_DIR_NAME
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / f"{slugify(row['title'])}_{comp_id}.mp4"
+    tmp = dest.with_suffix(".tmp.mp4")
+    try:
+        paths = []
+        for i in ids:
+            c = found.get(i)
+            if not c or c["status"] != "done" or not c["path"]:
+                raise RuntimeError(f"clip #{i} indisponible")
+            paths.append(CLIPS_DIR / c["path"])
+
+        with PROGRESS_LOCK:
+            PROGRESS[key] = "Analyse des clips…"
+        cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+        filters, vlabels, alabels = [], [], []
+        n_inputs = 0
+        for i, p in enumerate(paths):
+            info = ffprobe_info(p)
+            cmd += ["-i", str(p)]
+            vin = n_inputs
+            n_inputs += 1
+            if info["audio"]:
+                ain = vin
+            else:  # piste silencieuse de la même durée pour garder la synchro
+                cmd += ["-f", "lavfi", "-t", f"{max(info['duration'], 0.1):.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
+                ain = n_inputs
+                n_inputs += 1
+            filters.append(
+                f"[{vin}:v]scale={COMPIL_W}:{COMPIL_H}:force_original_aspect_ratio=decrease,"
+                f"pad={COMPIL_W}:{COMPIL_H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={COMPIL_FPS},format=yuv420p[v{i}]"
+            )
+            filters.append(f"[{ain}:a]aformat=sample_rates=48000:channel_layouts=stereo[a{i}]")
+            vlabels.append(f"[v{i}]")
+            alabels.append(f"[a{i}]")
+        filters.append("".join(v + a for v, a in zip(vlabels, alabels)) + f"concat=n={len(paths)}:v=1:a=1[v][a]")
+        cmd += [
+            "-filter_complex", ";".join(filters), "-map", "[v]", "-map", "[a]",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(tmp),
+        ]
+        with PROGRESS_LOCK:
+            PROGRESS[key] = f"Encodage de {len(paths)} clips…"
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.strip()[-400:] or "ffmpeg a échoué")
+        tmp.rename(dest)
+        duration = ffprobe_info(dest)["duration"]
+        with db() as conn:
+            conn.execute(
+                "UPDATE compilations SET status='done', path=?, duration=?, error=NULL WHERE id = ?",
+                (dest.relative_to(CLIPS_DIR).as_posix(), round(duration, 2), comp_id),
+            )
+    except Exception as exc:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        with db() as conn:
+            conn.execute("UPDATE compilations SET status='error', error=? WHERE id = ?", (str(exc)[:500], comp_id))
+    finally:
+        with PROGRESS_LOCK:
+            PROGRESS.pop(key, None)
 
 
 # ------------------------------------------------------------------------ routes
@@ -802,6 +932,73 @@ def api_import_library():
     for clip_id in to_download:
         threading.Thread(target=run_download, args=(clip_id,), daemon=True).start()
     return jsonify({"imported": imported, "skipped": skipped, "downloading": downloading, "errors": errors})
+
+
+# ---- compilations
+
+@app.get("/api/compilations")
+def api_compilations():
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM compilations ORDER BY id DESC").fetchall()
+        return jsonify([compilation_to_dict(conn, r) for r in rows])
+
+
+@app.post("/api/compilations")
+def api_create_compilation():
+    data = request.get_json(silent=True) or {}
+    try:
+        ids = [int(i) for i in data.get("clip_ids") or []]
+    except (TypeError, ValueError):
+        return jsonify({"error": "clip_ids invalide"}), 400
+    if len(ids) < 2:
+        return jsonify({"error": "Sélectionne au moins deux clips"}), 400
+    title = (data.get("title") or "").strip() or f"Compilation {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    with db() as conn:
+        marks = ",".join("?" * len(ids))
+        ready = {r["id"] for r in conn.execute(f"SELECT id FROM clips WHERE id IN ({marks}) AND status = 'done'", ids)}
+        missing = [i for i in ids if i not in ready]
+        if missing:
+            return jsonify({"error": f"Clips non prêts ou inconnus : {missing}"}), 400
+        cur = conn.execute(
+            "INSERT INTO compilations(title, clip_ids, status, created_at) VALUES (?,?,'pending',?)",
+            (title, json.dumps(ids), datetime.now().isoformat(timespec="seconds")),
+        )
+        comp_id = cur.lastrowid
+        row = conn.execute("SELECT * FROM compilations WHERE id = ?", (comp_id,)).fetchone()
+        result = compilation_to_dict(conn, row)
+    threading.Thread(target=build_compilation, args=(comp_id,), daemon=True).start()
+    return jsonify(result), 201
+
+
+@app.get("/api/compilations/<int:comp_id>")
+def api_get_compilation(comp_id):
+    with db() as conn:
+        row = conn.execute("SELECT * FROM compilations WHERE id = ?", (comp_id,)).fetchone()
+        if not row:
+            abort(404)
+        return jsonify(compilation_to_dict(conn, row))
+
+
+@app.delete("/api/compilations/<int:comp_id>")
+def api_delete_compilation(comp_id):
+    with db() as conn:
+        row = conn.execute("SELECT * FROM compilations WHERE id = ?", (comp_id,)).fetchone()
+        if not row:
+            abort(404)
+        if row["path"]:
+            (CLIPS_DIR / row["path"]).unlink(missing_ok=True)
+        conn.execute("DELETE FROM compilations WHERE id = ?", (comp_id,))
+    return jsonify({"ok": True})
+
+
+@app.post("/api/compilations/<int:comp_id>/reveal")
+def api_reveal_compilation(comp_id):
+    with db() as conn:
+        row = conn.execute("SELECT * FROM compilations WHERE id = ?", (comp_id,)).fetchone()
+    if not row or not row["path"]:
+        abort(404)
+    subprocess.Popen(["open", "-R", str(CLIPS_DIR / row["path"])])
+    return jsonify({"ok": True})
 
 
 @app.post("/api/clips/<int:clip_id>/reveal")

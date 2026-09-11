@@ -37,6 +37,14 @@ reçoivent un lien symbolique vers le même fichier dans `clips/<tag>/`.
 - **Exports dérivés** : boutons MP3, WAV (audio seul) et GIF, générés par ffmpeg à côté du mp4.
 - **Gérer les tags** : créer des tags à l'avance, supprimer ceux qui sont vides.
 
+**Compilations (lecture à la suite / assemblage)**
+- « ＋ Compil » sur une carte (ou « Tout sélectionner ») ajoute le clip à une sélection
+  ordonnable, affichée dans la barre en bas (mémorisée entre deux visites).
+- « ▶ Lire à la suite » enchaîne les clips dans un lecteur plein écran (←/→, boucle, Échap).
+- « 🎬 Compiler en une vidéo » assemble la sélection avec ffmpeg en un seul mp4
+  (1080p, 30 fps, stéréo — les clips hétérogènes sont mis à l'échelle et pillarboxés),
+  rangé dans `clips/_compilations/`. La section « Compilations » liste, lit et télécharge.
+
 **Partager sa bibliothèque**
 - « Exporter (JSON léger) » : liens, bornes et tags seulement. La personne qui l'importe
   re-télécharge chaque clip depuis YouTube.
@@ -55,6 +63,7 @@ reçoivent un lien symbolique vers le même fichier dans `clips/<tag>/`.
 | `POST` | `/api/clips/<id>/usages` · `DELETE /api/usages/<id>` | utilisations |
 | `GET` | `/api/projects` | projets connus |
 | `GET/POST/DELETE` | `/api/tags[/<name>]` | tags |
+| `GET/POST` | `/api/compilations` · `GET/DELETE /api/compilations/<id>` | compilations (`{clip_ids, title}`) |
 | `GET` | `/api/export[?files=1]` · `POST /api/import` | partage |
 | `GET` | `/media/<chemin>` | fichiers |
 

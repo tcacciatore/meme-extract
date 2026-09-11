@@ -48,14 +48,22 @@ function switchTab(name) {
 
 // ------------------------------------------------------------------ tags connus
 let knownTags = [];
+// selection : Map ordonnée id -> clip (l'ordre d'insertion = ordre de lecture), persistée dans localStorage
+const selection = new Map();
+try { (JSON.parse(localStorage.getItem('selection') || '[]')).forEach((c) => selection.set(c.id, c)); } catch (_) { /* ignore */ }
 async function refreshTags() {
   knownTags = await api('/api/tags');
   $('#tag-suggestions').replaceChildren(...knownTags.map((t) => el('option', { value: t.name })));
   renderQuickTags();
   renderTagFilter();
   renderTagManager();
-  const total = knownTags.length ? await api('/api/clips?status=done').then((c) => c.length) : 0;
-  $('#lib-count').textContent = total || '';
+  const done = await api('/api/clips?status=done');
+  $('#lib-count').textContent = done.length || '';
+  // Retire de la sélection les clips supprimés entre-temps
+  const alive = new Set(done.map((c) => c.id));
+  let changed = false;
+  for (const id of [...selection.keys()]) if (!alive.has(id)) { selection.delete(id); changed = true; }
+  if (changed) { saveSelection(); renderCompileBar(); }
 }
 
 // ------------------------------------------------------------------ éditeur de tags (réutilisable)
@@ -291,10 +299,12 @@ async function loadLibrary() {
   if ($('#only-done').checked) params.set('status', 'done');
   const [sort, order] = $('#sort').value.split(':');
   params.set('sort', sort); params.set('order', order);
-  const [clips] = await Promise.all([api(`/api/clips?${params}`), refreshProjects()]);
+  const [clips] = await Promise.all([api(`/api/clips?${params}`), refreshProjects(), loadCompilations()]);
+  lastClips = clips;
   $('#lib-empty').hidden = clips.length > 0;
   $('#clips').replaceChildren(...clips.map(renderClip));
 }
+let lastClips = [];
 
 function replaceCard(c) {
   const old = document.querySelector(`.clip[data-id="${c.id}"]`);
@@ -305,7 +315,7 @@ function renderClip(c) {
   const media = c.status === 'done' && c.media_url
     ? el('video', { controls: true, preload: 'metadata', src: c.media_url, poster: c.thumbnail || null })
     : el('div', { class: 'placeholder' }, c.status === 'error' ? `Erreur : ${c.error}` : (c.progress || STATUS_LABEL[c.status]));
-  return el('div', { class: 'clip', 'data-id': c.id },
+  return el('div', { class: 'clip' + (selection.has(c.id) ? ' selected' : ''), 'data-id': c.id },
     media,
     el('div', { class: 'body' },
       el('div', { class: 'title' }, c.title),
@@ -317,6 +327,7 @@ function renderClip(c) {
       renderUsages(c),
       c.status === 'done' ? renderExports(c) : null,
       el('div', { class: 'actions' },
+        c.status === 'done' ? el('button', { class: 'icon sel' + (selection.has(c.id) ? ' on' : ''), title: 'Ajouter / retirer de la sélection', onclick: () => toggleSelect(c) }, selection.has(c.id) ? '✓ Compil' : '＋ Compil') : null,
         c.path ? el('button', { class: 'icon', title: c.path, onclick: () => api(`/api/clips/${c.id}/reveal`, { method: 'POST' }) }, '📁 Finder') : null,
         c.media_url ? el('a', { class: 'icon', href: c.media_url, download: '', title: 'Télécharger' }, el('button', { class: 'icon' }, '⬇')) : null,
         el('button', { class: 'icon', onclick: () => openEdit(c) }, '✎'),
@@ -397,6 +408,137 @@ $('#import-file').addEventListener('change', async () => {
   } catch (err) { out.className = 'small import-err'; out.textContent = err.message; }
   finally { $('#import-file').value = ''; }
 });
+
+// ------------------------------------------------------------------ sélection / compilation
+
+function saveSelection() {
+  try { localStorage.setItem('selection', JSON.stringify([...selection.values()].map((c) => ({ id: c.id, title: c.title, media_url: c.media_url, duration: c.duration })))); } catch (_) { /* ignore */ }
+}
+function toggleSelect(c) {
+  if (selection.has(c.id)) selection.delete(c.id); else selection.set(c.id, c);
+  saveSelection(); renderCompileBar();
+  const card = document.querySelector(`.clip[data-id="${c.id}"]`);
+  if (card) {
+    card.classList.toggle('selected', selection.has(c.id));
+    const b = card.querySelector('.actions .sel');
+    if (b) { b.classList.toggle('on', selection.has(c.id)); b.textContent = selection.has(c.id) ? '✓ Compil' : '＋ Compil'; }
+  }
+}
+$('#btn-select-all').addEventListener('click', () => {
+  lastClips.filter((c) => c.status === 'done').forEach((c) => selection.set(c.id, c));
+  saveSelection(); renderCompileBar(); loadLibrary();
+});
+$('#compile-clear').addEventListener('click', () => { selection.clear(); saveSelection(); renderCompileBar(); loadLibrary(); });
+$('#compile-toggle-list').addEventListener('click', () => { const l = $('#compile-list'); l.hidden = !l.hidden; $('#compile-toggle-list').textContent = l.hidden ? 'Ordonner ▾' : 'Ordonner ▴'; });
+
+function moveInSelection(id, delta) {
+  const ids = [...selection.keys()], i = ids.indexOf(id), j = i + delta;
+  if (i < 0 || j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  const items = ids.map((k) => [k, selection.get(k)]);
+  selection.clear(); items.forEach(([k, v]) => selection.set(k, v));
+  saveSelection(); renderCompileBar();
+}
+function renderCompileBar() {
+  const items = [...selection.values()];
+  const bar = $('#compile-bar');
+  bar.hidden = items.length === 0;
+  document.body.classList.toggle('has-compile-bar', items.length > 0);
+  if (!items.length) return;
+  const total = items.reduce((a, c) => a + (c.duration || 0), 0);
+  $('#compile-summary').textContent = `${items.length} clip${items.length > 1 ? 's' : ''} · ${total.toFixed(1)} s`;
+  $('#compile-list').replaceChildren(...items.map((c, i) => el('li', {},
+    el('span', { class: 'n' }, `${i + 1}.`),
+    el('span', { class: 't' }, c.title),
+    el('span', { class: 'muted' }, `${c.duration} s`),
+    el('button', { class: 'ghost', title: 'Monter', disabled: i === 0, onclick: () => moveInSelection(c.id, -1) }, '↑'),
+    el('button', { class: 'ghost', title: 'Descendre', disabled: i === items.length - 1, onclick: () => moveInSelection(c.id, 1) }, '↓'),
+    el('button', { class: 'ghost', title: 'Retirer', onclick: () => toggleSelect(c) }, '✕'))));
+}
+
+// Lecture enchaînée dans la page
+const pl = { items: [], i: 0 };
+const plVideo = $('#playlist-video');
+function playlistOpen(items, start = 0) {
+  if (!items.length) return;
+  pl.items = items; pl.i = start;
+  $('#playlist-overlay').hidden = false;
+  playlistLoad();
+}
+function playlistLoad() {
+  const c = pl.items[pl.i];
+  $('#playlist-pos').textContent = `${pl.i + 1} / ${pl.items.length}`;
+  $('#playlist-title').textContent = c.title;
+  plVideo.src = c.media_url;
+  plVideo.play().catch(() => { /* autoplay bloqué : l'utilisateur clique play */ });
+}
+function playlistStep(delta) {
+  let n = pl.i + delta;
+  if (n >= pl.items.length) { if (!$('#playlist-loop').checked) { plVideo.pause(); return; } n = 0; }
+  if (n < 0) n = pl.items.length - 1;
+  pl.i = n; playlistLoad();
+}
+function playlistClose() { plVideo.pause(); plVideo.removeAttribute('src'); plVideo.load(); $('#playlist-overlay').hidden = true; }
+plVideo.addEventListener('ended', () => playlistStep(1));
+$('#playlist-next').addEventListener('click', () => playlistStep(1));
+$('#playlist-prev').addEventListener('click', () => playlistStep(-1));
+$('#playlist-close').addEventListener('click', playlistClose);
+$('#playlist-overlay').addEventListener('click', (e) => { if (e.target === $('#playlist-overlay')) playlistClose(); });
+$('#compile-play').addEventListener('click', () => playlistOpen([...selection.values()]));
+document.addEventListener('keydown', (e) => {
+  if ($('#playlist-overlay').hidden) return;
+  if (e.key === 'Escape') playlistClose();
+  else if (e.key === 'ArrowRight') { e.preventDefault(); playlistStep(1); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); playlistStep(-1); }
+});
+
+// Compilation en une seule vidéo (ffmpeg côté serveur)
+$('#compile-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  btn.disabled = true;
+  try {
+    await api('/api/compilations', { method: 'POST', body: JSON.stringify({ clip_ids: [...selection.keys()], title: $('#compile-title').value }) });
+    $('#compile-title').value = '';
+    $('#compil-details').open = true;
+    await loadCompilations();
+    startCompilPolling();
+    $('#compil-section').scrollIntoView({ behavior: 'smooth' });
+  } catch (err) { alert(err.message); }
+  finally { btn.disabled = false; }
+});
+let compilPoll = null;
+function startCompilPolling() {
+  if (compilPoll) return;
+  compilPoll = setInterval(async () => {
+    const list = await loadCompilations();
+    if (!list.some((c) => c.status === 'pending' || c.status === 'building')) { clearInterval(compilPoll); compilPoll = null; }
+  }, 2000);
+}
+const COMPIL_LABEL = { pending: 'En attente…', building: 'Assemblage…', done: 'Prête', error: 'Erreur' };
+async function loadCompilations() {
+  const list = await api('/api/compilations');
+  $('#compil-count').textContent = list.length || '';
+  $('#compilations').replaceChildren(...list.map((k) => el('div', { class: 'compil' },
+    k.status === 'done' ? el('video', { controls: true, preload: 'metadata', src: k.media_url })
+      : el('div', { class: 'placeholder' }, k.status === 'error' ? `Erreur : ${k.error}` : (k.progress || COMPIL_LABEL[k.status])),
+    el('div', { class: 'body' },
+      el('div', { class: 'title' }, k.title),
+      el('div', { class: 'clips-in' }, `${k.clips.length} clips` + (k.duration ? ` · ${k.duration} s` : '') + ' — ' + k.clips.map((c) => c.title).join(' → ')),
+      el('div', { class: 'actions' },
+        k.status === 'done' ? el('button', { class: 'icon', onclick: () => playlistOpen(k.clips.map((c) => selection.get(c.id) || lastClips.find((x) => x.id === c.id)).filter(Boolean)) }, '▶ Clips à la suite') : null,
+        k.path ? el('button', { class: 'icon', onclick: () => api(`/api/compilations/${k.id}/reveal`, { method: 'POST' }) }, '📁 Finder') : null,
+        k.media_url ? el('a', { href: k.media_url, download: '' }, el('button', { class: 'icon' }, '⬇')) : null,
+        el('span', { class: 'spacer' }),
+        el('button', { class: 'icon danger', onclick: async (e) => {
+          const b = e.currentTarget;
+          if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Supprimer ?'; b.classList.add('armed'); setTimeout(() => { delete b.dataset.armed; b.textContent = '🗑'; b.classList.remove('armed'); }, 4000); return; }
+          await api(`/api/compilations/${k.id}`, { method: 'DELETE' }); loadCompilations();
+        } }, '🗑'))))));
+  if (list.some((c) => c.status === 'pending' || c.status === 'building')) startCompilPolling();
+  return list;
+}
+renderCompileBar();
 
 // ------------------------------------------------------------------ édition
 let editing = null;
