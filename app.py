@@ -15,6 +15,7 @@ import glob
 import io
 import json
 import os
+import random
 import re
 import shutil
 import sqlite3
@@ -952,6 +953,8 @@ def api_create_compilation():
         return jsonify({"error": "clip_ids invalide"}), 400
     if len(ids) < 2:
         return jsonify({"error": "Sélectionne au moins deux clips"}), 400
+    if data.get("shuffle", True):
+        random.shuffle(ids)  # l'ordre enregistré = l'ordre réel de la vidéo
     title = (data.get("title") or "").strip() or f"Compilation {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     with db() as conn:
         marks = ",".join("?" * len(ids))

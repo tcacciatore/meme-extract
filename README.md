@@ -41,6 +41,10 @@ reçoivent un lien symbolique vers le même fichier dans `clips/<tag>/`.
 - « ＋ Compil » sur une carte (ou « Tout sélectionner ») ajoute le clip à une sélection
   ordonnable, affichée dans la barre en bas (mémorisée entre deux visites).
 - « ▶ Lire à la suite » enchaîne les clips dans un lecteur plein écran (←/→, boucle, Échap).
+- « 🔀 Mélanger » réordonne la sélection au hasard ; la case « Ordre aléatoire » (cochée par
+  défaut) mélange les clips au moment de la compilation.
+- « 🎲 Tout compiler (ordre aléatoire) » dans la section Compilations prend tous les clips prêts
+  et lance directement une compilation.
 - « 🎬 Compiler en une vidéo » assemble la sélection avec ffmpeg en un seul mp4
   (1080p, 30 fps, stéréo — les clips hétérogènes sont mis à l'échelle et pillarboxés),
   rangé dans `clips/_compilations/`. La section « Compilations » liste, lit et télécharge.
@@ -63,7 +67,7 @@ reçoivent un lien symbolique vers le même fichier dans `clips/<tag>/`.
 | `POST` | `/api/clips/<id>/usages` · `DELETE /api/usages/<id>` | utilisations |
 | `GET` | `/api/projects` | projets connus |
 | `GET/POST/DELETE` | `/api/tags[/<name>]` | tags |
-| `GET/POST` | `/api/compilations` · `GET/DELETE /api/compilations/<id>` | compilations (`{clip_ids, title}`) |
+| `GET/POST` | `/api/compilations` · `GET/DELETE /api/compilations/<id>` | compilations (`{clip_ids, title, shuffle}`) |
 | `GET` | `/api/export[?files=1]` · `POST /api/import` | partage |
 | `GET` | `/media/<chemin>` | fichiers |
 

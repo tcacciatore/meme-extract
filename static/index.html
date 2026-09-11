@@ -128,6 +128,9 @@
       <details id="compil-details">
         <summary>Compilations <span id="compil-count" class="badge"></span></summary>
         <p class="muted small">Sélectionne des clips avec « ＋ Compil » sur leurs cartes, puis lis-les à la suite ou assemble-les en une seule vidéo (1080p, 30 fps).</p>
+        <div class="row wrap">
+          <button class="primary" id="btn-compile-all" title="Tous les clips prêts, dans un ordre aléatoire">🎲 Tout compiler (ordre aléatoire)</button>
+        </div>
         <div id="compilations" class="compil-list"></div>
       </details>
     </section>
@@ -146,8 +149,10 @@
       <button class="ghost small-btn" id="compile-toggle-list">Ordonner ▾</button>
       <span class="spacer"></span>
       <button class="primary" id="compile-play">▶ Lire à la suite</button>
+      <button class="ghost small-btn" id="compile-shuffle-now" title="Mélanger l'ordre de la sélection">🔀 Mélanger</button>
       <form id="compile-form" class="row">
         <input id="compile-title" placeholder="Nom de la compilation" autocomplete="off">
+        <label class="inline small" title="Les clips sont mélangés au moment de la compilation"><input type="checkbox" id="compile-shuffle" checked> Ordre aléatoire</label>
         <button type="submit">🎬 Compiler en une vidéo</button>
       </form>
       <button class="ghost small-btn danger" id="compile-clear">Vider</button>
