@@ -43,8 +43,10 @@ reçoivent un lien symbolique vers le même fichier dans `clips/<tag>/`.
 - « ▶ Lire à la suite » enchaîne les clips dans un lecteur plein écran (←/→, boucle, Échap).
 - « 🔀 Mélanger » réordonne la sélection au hasard ; la case « Ordre aléatoire » (cochée par
   défaut) mélange les clips au moment de la compilation.
-- « 🎲 Tout compiler (ordre aléatoire) » dans la section Compilations prend tous les clips prêts
-  et lance directement une compilation.
+- « 🎲 Compiler les N clips affichés (aléatoire) » dans la section Compilations prend les clips
+  du filtre courant (tags, exclusions, recherche) et lance directement une compilation.
+- « ☑ Sélectionner les clips affichés » remplace la sélection ; « ＋ Ajouter les clips affichés »
+  la complète (pour combiner plusieurs filtres).
 - « 🎬 Compiler en une vidéo » assemble la sélection avec ffmpeg en un seul mp4
   (1080p, 30 fps, stéréo — les clips hétérogènes sont mis à l'échelle et pillarboxés),
   rangé dans `clips/_compilations/`. La section « Compilations » liste, lit et télécharge.

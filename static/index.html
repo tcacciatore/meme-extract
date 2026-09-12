@@ -129,14 +129,17 @@
         <summary>Compilations <span id="compil-count" class="badge"></span></summary>
         <p class="muted small">Sélectionne des clips avec « ＋ Compil » sur leurs cartes, puis lis-les à la suite ou assemble-les en une seule vidéo (1080p, 30 fps).</p>
         <div class="row wrap">
-          <button class="primary" id="btn-compile-all" title="Tous les clips prêts, dans un ordre aléatoire">🎲 Tout compiler (ordre aléatoire)</button>
+          <button class="primary" id="btn-compile-all" title="Compile les clips actuellement affichés (filtre + recherche), dans un ordre aléatoire">🎲 Compiler les clips affichés (aléatoire)</button>
+          <span id="compile-all-hint" class="muted small"></span>
         </div>
         <div id="compilations" class="compil-list"></div>
       </details>
     </section>
     <p id="lib-empty" class="muted center" hidden>Aucun clip pour ce filtre.</p>
     <div class="row wrap select-row">
-      <button class="ghost small-btn" id="btn-select-all">☑ Tout sélectionner (filtre courant)</button>
+      <button class="ghost small-btn" id="btn-select-all" title="Remplace la sélection par les clips affichés">☑ Sélectionner les clips affichés</button>
+      <button class="ghost small-btn" id="btn-select-add" title="Ajoute les clips affichés à la sélection existante">＋ Ajouter les clips affichés à la sélection</button>
+      <span id="shown-count" class="muted small"></span>
     </div>
     <div id="clips" class="clips-grid"></div>
     <datalist id="project-suggestions"></datalist>

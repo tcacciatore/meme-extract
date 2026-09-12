@@ -301,10 +301,23 @@ async function loadLibrary() {
   params.set('sort', sort); params.set('order', order);
   const [clips] = await Promise.all([api(`/api/clips?${params}`), refreshProjects(), loadCompilations()]);
   lastClips = clips;
+  const nDone = clips.filter((c) => c.status === 'done').length;
+  const filterLabel = describeFilter();
+  $('#shown-count').textContent = `${nDone} clip${nDone > 1 ? 's' : ''} prêt${nDone > 1 ? 's' : ''} affiché${nDone > 1 ? 's' : ''}${filterLabel ? ` (${filterLabel})` : ''}`;
+  $('#btn-compile-all').textContent = `🎲 Compiler les ${nDone} clips affichés (aléatoire)`;
+  $('#btn-compile-all').disabled = nDone < 2;
+  $('#compile-all-hint').textContent = filterLabel ? `Filtre actif : ${filterLabel}` : 'Aucun filtre : toute la bibliothèque';
   $('#lib-empty').hidden = clips.length > 0;
   $('#clips').replaceChildren(...clips.map(renderClip));
 }
 let lastClips = [];
+function describeFilter() {
+  const parts = [];
+  if (includeTags.size) parts.push([...includeTags].join(' + '));
+  if (excludeTags.size) parts.push('sans ' + [...excludeTags].join(', '));
+  const q = $('#search').value.trim(); if (q) parts.push(`« ${q} »`);
+  return parts.join(', ');
+}
 
 function replaceCard(c) {
   const old = document.querySelector(`.clip[data-id="${c.id}"]`);
@@ -426,8 +439,13 @@ function toggleSelect(c) {
   }
 }
 $('#btn-select-all').addEventListener('click', () => {
+  selection.clear();
   lastClips.filter((c) => c.status === 'done').forEach((c) => selection.set(c.id, c));
-  saveSelection(); renderCompileBar(); loadLibrary();
+  saveSelection(); setCompileCollapsed(false); loadLibrary();
+});
+$('#btn-select-add').addEventListener('click', () => {
+  lastClips.filter((c) => c.status === 'done').forEach((c) => selection.set(c.id, c));
+  saveSelection(); setCompileCollapsed(false); loadLibrary();
 });
 $('#compile-clear').addEventListener('click', () => { selection.clear(); saveSelection(); renderCompileBar(); loadLibrary(); });
 $('#compile-shuffle-now').addEventListener('click', () => {
@@ -536,9 +554,11 @@ async function launchCompilation(clipIds, title, shuffle) {
 $('#btn-compile-all').addEventListener('click', async (e) => {
   const btn = e.currentTarget; btn.disabled = true;
   try {
-    const done = await api('/api/clips?status=done');
-    if (done.length < 2) throw new Error('Il faut au moins deux clips prêts');
-    await launchCompilation(done.map((c) => c.id), `Best of aléatoire ${new Date().toLocaleDateString('fr-FR')} ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`, true);
+    const done = lastClips.filter((c) => c.status === 'done');
+    if (done.length < 2) throw new Error('Il faut au moins deux clips prêts dans le filtre courant');
+    const label = describeFilter() || 'toute la bibliothèque';
+    const when = `${new Date().toLocaleDateString('fr-FR')} ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
+    await launchCompilation(done.map((c) => c.id), `Best of ${label} — ${when}`, true);
   } catch (err) { alert(err.message); }
   finally { btn.disabled = false; }
 });
