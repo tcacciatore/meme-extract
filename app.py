@@ -192,6 +192,7 @@ def clip_to_dict(conn, row) -> dict:
         "usages": usages,
         "use_count": len(usages),
         "exports": existing_exports(row["path"]),
+        "vertical": vertical_info("clip", row["id"], row["path"]),
         "created_at": row["created_at"],
     }
 
@@ -259,6 +260,76 @@ def make_export(rel_path: str, fmt: str) -> Path:
     return dst
 
 
+# Export vertical 9:16 (Shorts / TikTok / Reels), pour un clip ou une compilation
+VERT_W, VERT_H = 1080, 1920
+DERIV_JOBS = {}  # (kind, id) -> {"status": "running"|"error", "error": str}
+
+
+def vertical_path(rel_path: str) -> Path:
+    p = CLIPS_DIR / rel_path
+    return p.with_name(p.stem + "_9x16.mp4")
+
+
+def vertical_info(kind: str, obj_id: int, rel_path: Optional[str]) -> dict:
+    with PROGRESS_LOCK:
+        job = DERIV_JOBS.get((kind, obj_id))
+    url = None
+    if rel_path and vertical_path(rel_path).exists():
+        url = f"/media/{vertical_path(rel_path).relative_to(CLIPS_DIR).as_posix()}"
+    return {"url": url, "status": job["status"] if job else None, "error": (job or {}).get("error")}
+
+
+def vertical_filter(mode: str, position: float) -> str:
+    position = min(1.0, max(0.0, position))
+    if mode == "crop":
+        # zoom plein cadre ; position 0 = bord gauche, 0.5 = centre, 1 = bord droit
+        return f"[0:v]scale=-2:{VERT_H},crop={VERT_W}:{VERT_H}:(iw-{VERT_W})*{position:.3f}:0,setsar=1[v]"
+    return (
+        f"[0:v]split[a][b];"
+        f"[a]scale={VERT_W}:{VERT_H}:force_original_aspect_ratio=increase,crop={VERT_W}:{VERT_H},"
+        f"boxblur=luma_radius=30:luma_power=3,eq=brightness=-0.08[bg];"
+        f"[b]scale={VERT_W}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+    )
+
+
+def build_vertical(kind: str, obj_id: int, rel_path: str, mode: str, position: float):
+    key = (kind, obj_id)
+    src = CLIPS_DIR / rel_path
+    dst = vertical_path(rel_path)
+    tmp = dst.with_name(dst.stem + ".tmp.mp4")
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+        "-filter_complex", vertical_filter(mode, position), "-map", "[v]", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(tmp),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.strip()[-300:] or "ffmpeg a échoué")
+        tmp.rename(dst)
+        with PROGRESS_LOCK:
+            DERIV_JOBS.pop(key, None)
+    except Exception as exc:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        with PROGRESS_LOCK:
+            DERIV_JOBS[key] = {"status": "error", "error": str(exc)[:300]}
+
+
+def start_vertical(kind: str, obj_id: int, rel_path: str, data: dict):
+    mode = "crop" if data.get("mode") == "crop" else "blur"
+    try:
+        position = float(data.get("position", 0.5))
+    except (TypeError, ValueError):
+        position = 0.5
+    with PROGRESS_LOCK:
+        if DERIV_JOBS.get((kind, obj_id), {}).get("status") == "running":
+            return jsonify({"error": "Déjà en cours"}), 409
+        DERIV_JOBS[(kind, obj_id)] = {"status": "running"}
+    threading.Thread(target=build_vertical, args=(kind, obj_id, rel_path, mode, position), daemon=True).start()
+    return jsonify({"ok": True, "status": "running"}), 202
+
+
 def set_progress(clip_id: int, message: Optional[str]):
     if message is not None:
         message = ANSI_RE.sub("", message)
@@ -301,6 +372,7 @@ def remove_clip_files(rel_path: Optional[str]):
         main.unlink()
     for fmt in EXPORT_FORMATS:
         derivative_path(rel_path, fmt).unlink(missing_ok=True)
+    vertical_path(rel_path).unlink(missing_ok=True)
 
 
 def run_download(clip_id: int):
@@ -432,6 +504,7 @@ def compilation_to_dict(conn, row) -> dict:
         "status": row["status"],
         "error": row["error"],
         "progress": progress,
+        "vertical": vertical_info("compil", row["id"], row["path"]),
         "created_at": row["created_at"],
     }
 
@@ -795,6 +868,24 @@ def api_export_clip(clip_id):
         return jsonify(clip_to_dict(conn, row))
 
 
+@app.post("/api/clips/<int:clip_id>/vertical")
+def api_vertical_clip(clip_id):
+    with db() as conn:
+        row = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    if not row or not row["path"] or row["status"] != "done":
+        return jsonify({"error": "Le clip n'est pas encore prêt"}), 400
+    return start_vertical("clip", clip_id, row["path"], request.get_json(silent=True) or {})
+
+
+@app.post("/api/compilations/<int:comp_id>/vertical")
+def api_vertical_compilation(comp_id):
+    with db() as conn:
+        row = conn.execute("SELECT * FROM compilations WHERE id = ?", (comp_id,)).fetchone()
+    if not row or not row["path"] or row["status"] != "done":
+        return jsonify({"error": "La compilation n'est pas encore prête"}), 400
+    return start_vertical("compil", comp_id, row["path"], request.get_json(silent=True) or {})
+
+
 # ---- partage : export / import de la bibliothèque
 
 EXPORT_VERSION = 1
@@ -990,6 +1081,7 @@ def api_delete_compilation(comp_id):
             abort(404)
         if row["path"]:
             (CLIPS_DIR / row["path"]).unlink(missing_ok=True)
+            vertical_path(row["path"]).unlink(missing_ok=True)
         conn.execute("DELETE FROM compilations WHERE id = ?", (comp_id,))
     return jsonify({"ok": True})
 

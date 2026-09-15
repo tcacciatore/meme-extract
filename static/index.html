@@ -200,6 +200,32 @@
     </form>
   </dialog>
 
+  <!-- Export vertical 9:16 -->
+  <dialog id="vertical-dialog">
+    <form method="dialog" class="card vertical-form" id="vertical-form">
+      <h2>Export vertical 9:16</h2>
+      <div class="vertical-body">
+        <div class="vertical-preview" id="vertical-preview">
+          <video id="vp-bg" muted playsinline preload="metadata"></video>
+          <video id="vp-fg" muted playsinline preload="metadata"></video>
+        </div>
+        <div class="vertical-options">
+          <label class="radio"><input type="radio" name="vmode" value="blur" checked> <b>Fond flou</b><br><span class="muted small">La vidéo entière, centrée, sur son propre fond flouté. Rien n'est coupé.</span></label>
+          <label class="radio"><input type="radio" name="vmode" value="crop"> <b>Recadrage plein cadre</b><br><span class="muted small">Zoom sur une zone : choisis la position gauche ↔ droite.</span></label>
+          <label id="vpos-wrap" hidden>Position <span id="vpos-val" class="muted small"></span>
+            <input type="range" id="vpos" min="0" max="100" value="50">
+          </label>
+          <p class="muted small">1080 × 1920, H.264 + AAC. Le fichier est créé à côté de l'original avec le suffixe <code>_9x16.mp4</code>. Générer à nouveau remplace le précédent.</p>
+          <p id="vertical-error" class="error" hidden></p>
+        </div>
+      </div>
+      <div class="row right">
+        <button type="button" class="ghost" id="vertical-cancel">Annuler</button>
+        <button type="submit" class="primary">📱 Générer</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

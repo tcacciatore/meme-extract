@@ -161,3 +161,17 @@ body.has-compile-bar .tab-panel { padding-bottom: 140px; }
 .compile-pill { position: fixed; right: 20px; bottom: 20px; z-index: 20; background: var(--accent); color: #fff; border: none;
   border-radius: 999px; padding: 10px 16px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.45); }
 .compile-pill:hover { background: #ff3358; }
+
+#vertical-dialog { max-width: 720px; }
+.vertical-body { display: flex; gap: 20px; align-items: flex-start; }
+.vertical-preview { position: relative; width: 198px; height: 352px; flex: none; border-radius: 12px; overflow: hidden; background: #000; border: 1px solid var(--border); }
+.vertical-preview video { position: absolute; inset: 0; width: 100%; height: 100%; }
+.vertical-preview #vp-bg { object-fit: cover; filter: blur(14px) brightness(.8); transform: scale(1.1); }
+.vertical-preview #vp-fg { object-fit: contain; }
+.vertical-preview.crop #vp-bg { display: none; }
+.vertical-preview.crop #vp-fg { object-fit: cover; }
+.vertical-options { flex: 1; min-width: 0; }
+.vertical-options .radio { display: block; color: var(--text); margin-bottom: 12px; cursor: pointer; }
+.vertical-options input[type=range] { width: 100%; margin-top: 6px; }
+.vertical-options code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+@media (max-width: 560px) { .vertical-body { flex-direction: column; align-items: center; } }

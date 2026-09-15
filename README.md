@@ -35,6 +35,9 @@ reçoivent un lien symbolique vers le même fichier dans `clips/<tag>/`.
 - **« Déjà utilisé dans… »** : sur chaque clip, indiquer la vidéo/projet où il a servi ;
   compteur d'utilisations, liste datée, tri « jamais utilisés » pour éviter les redites.
 - **Exports dérivés** : boutons MP3, WAV (audio seul) et GIF, générés par ffmpeg à côté du mp4.
+- **Export vertical 9:16** (Shorts, TikTok, Reels) pour un clip ou une compilation : « fond flou »
+  (vidéo entière centrée sur son propre fond flouté) ou « recadrage plein cadre » avec curseur de
+  position et aperçu. Sortie 1080×1920 en `<nom>_9x16.mp4`, générée en arrière-plan.
 - **Gérer les tags** : créer des tags à l'avance, supprimer ceux qui sont vides.
 
 **Compilations (lecture à la suite / assemblage)**
@@ -66,6 +69,7 @@ reçoivent un lien symbolique vers le même fichier dans `clips/<tag>/`.
 | `GET/POST` | `/api/clips` | liste (`tags`, `exclude`, `q`, `status`, `sort`, `order`) / création |
 | `GET/PUT/DELETE` | `/api/clips/<id>` | détail / titre+tags / suppression |
 | `POST` | `/api/clips/<id>/retry`, `/reveal`, `/export` | relancer, Finder, dérivé `{format: mp3|wav|gif}` |
+| `POST` | `/api/clips/<id>/vertical` · `/api/compilations/<id>/vertical` | export 9:16 `{mode: blur|crop, position: 0..1}` |
 | `POST` | `/api/clips/<id>/usages` · `DELETE /api/usages/<id>` | utilisations |
 | `GET` | `/api/projects` | projets connus |
 | `GET/POST/DELETE` | `/api/tags[/<name>]` | tags |

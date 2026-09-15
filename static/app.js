@@ -383,8 +383,73 @@ function renderExports(c) {
       wrap.append(btn);
     }
   }
+  wrap.append(verticalButtons('clip', c));
   return wrap;
 }
+
+// Bouton(s) 9:16 : ouvre le réglage ; lien de téléchargement quand le fichier existe ; suivi pendant la génération
+function verticalButtons(kind, obj) {
+  const v = obj.vertical || {};
+  const frag = document.createDocumentFragment();
+  if (v.status === 'running') {
+    frag.append(el('button', { class: 'icon', disabled: true }, '📱 9:16…'));
+    watchVertical(kind, obj.id);
+    return frag;
+  }
+  frag.append(el('button', { class: 'icon', title: v.error ? `Dernière erreur : ${v.error}` : 'Exporter en vertical 9:16 (Shorts, TikTok, Reels)', onclick: () => openVertical(kind, obj) }, v.url ? '📱 9:16 ↻' : '📱 9:16'));
+  if (v.url) frag.append(el('a', { class: 'btn ready', href: v.url, download: '', title: 'Télécharger la version 9:16' }, '📱 9:16 ✓'));
+  return frag;
+}
+const verticalWatch = new Set();
+function watchVertical(kind, id) {
+  const key = `${kind}:${id}`;
+  if (verticalWatch.has(key)) return;
+  verticalWatch.add(key);
+  const timer = setInterval(async () => {
+    try {
+      const obj = await api(kind === 'clip' ? `/api/clips/${id}` : `/api/compilations/${id}`);
+      if ((obj.vertical || {}).status !== 'running') {
+        clearInterval(timer); verticalWatch.delete(key);
+        if (kind === 'clip') replaceCard(obj); else loadCompilations();
+        if (obj.vertical && obj.vertical.error) alert(`Export 9:16 : ${obj.vertical.error}`);
+      }
+    } catch (_) { clearInterval(timer); verticalWatch.delete(key); }
+  }, 2000);
+}
+
+// Fenêtre de réglage avec aperçu (mode + position)
+let verticalTarget = null;
+function openVertical(kind, obj) {
+  verticalTarget = { kind, obj };
+  const src = obj.media_url;
+  $('#vp-bg').src = src; $('#vp-fg').src = src;
+  $('#vertical-error').hidden = true;
+  $('#vertical-form').vmode.value = 'blur';
+  $('#vpos').value = 50;
+  updateVerticalPreview();
+  $('#vertical-dialog').showModal();
+}
+function updateVerticalPreview() {
+  const mode = $('#vertical-form').vmode.value, pos = Number($('#vpos').value);
+  $('#vertical-preview').classList.toggle('crop', mode === 'crop');
+  $('#vpos-wrap').hidden = mode !== 'crop';
+  $('#vp-fg').style.objectPosition = mode === 'crop' ? `${pos}% 50%` : '50% 50%';
+  $('#vpos-val').textContent = pos === 50 ? '(centre)' : pos < 50 ? `(${50 - pos} % vers la gauche)` : `(${pos - 50} % vers la droite)`;
+}
+document.querySelectorAll('#vertical-form input[name=vmode]').forEach((r) => r.addEventListener('change', updateVerticalPreview));
+$('#vpos').addEventListener('input', updateVerticalPreview);
+$('#vertical-cancel').addEventListener('click', () => $('#vertical-dialog').close());
+$('#vertical-dialog').addEventListener('close', () => { $('#vp-bg').removeAttribute('src'); $('#vp-fg').removeAttribute('src'); });
+$('#vertical-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const { kind, obj } = verticalTarget;
+  const body = { mode: $('#vertical-form').vmode.value, position: Number($('#vpos').value) / 100 };
+  try {
+    await api(kind === 'clip' ? `/api/clips/${obj.id}/vertical` : `/api/compilations/${obj.id}/vertical`, { method: 'POST', body: JSON.stringify(body) });
+    $('#vertical-dialog').close();
+    if (kind === 'clip') replaceCard(await api(`/api/clips/${obj.id}`)); else loadCompilations();
+  } catch (err) { $('#vertical-error').textContent = err.message; $('#vertical-error').hidden = false; }
+});
 
 // Confirmation en deux clics (les dialogues natifs confirm() sont bloqués dans certains navigateurs)
 async function removeClip(c, btn) {
@@ -582,6 +647,7 @@ async function loadCompilations() {
       el('div', { class: 'clips-in' }, `${k.clips.length} clips` + (k.duration ? ` · ${k.duration} s` : '') + ' — ' + k.clips.map((c) => c.title).join(' → ')),
       el('div', { class: 'actions' },
         k.status === 'done' ? el('button', { class: 'icon', onclick: () => playlistOpen(k.clips.map((c) => selection.get(c.id) || lastClips.find((x) => x.id === c.id)).filter(Boolean)) }, '▶ Clips à la suite') : null,
+        k.status === 'done' ? verticalButtons('compil', k) : null,
         k.path ? el('button', { class: 'icon', onclick: () => api(`/api/compilations/${k.id}/reveal`, { method: 'POST' }) }, '📁 Finder') : null,
         k.media_url ? el('a', { href: k.media_url, download: '' }, el('button', { class: 'icon' }, '⬇')) : null,
         el('span', { class: 'spacer' }),
