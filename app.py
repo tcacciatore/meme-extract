@@ -1092,8 +1092,15 @@ def api_reveal_compilation(comp_id):
         row = conn.execute("SELECT * FROM compilations WHERE id = ?", (comp_id,)).fetchone()
     if not row or not row["path"]:
         abort(404)
-    subprocess.Popen(["open", "-R", str(CLIPS_DIR / row["path"])])
+    subprocess.Popen(["open", "-R", str(reveal_target(row["path"]))])
     return jsonify({"ok": True})
+
+
+def reveal_target(rel_path: str) -> Path:
+    """?which=vertical → la version 9:16 si elle existe."""
+    if request.args.get("which") == "vertical" and vertical_path(rel_path).exists():
+        return vertical_path(rel_path)
+    return CLIPS_DIR / rel_path
 
 
 @app.post("/api/clips/<int:clip_id>/reveal")
@@ -1102,7 +1109,7 @@ def api_reveal_clip(clip_id):
         row = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
     if not row or not row["path"]:
         abort(404)
-    subprocess.Popen(["open", "-R", str(CLIPS_DIR / row["path"])])
+    subprocess.Popen(["open", "-R", str(reveal_target(row["path"]))])
     return jsonify({"ok": True})
 
 

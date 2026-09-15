@@ -397,8 +397,45 @@ function verticalButtons(kind, obj) {
     return frag;
   }
   frag.append(el('button', { class: 'icon', title: v.error ? `Dernière erreur : ${v.error}` : 'Exporter en vertical 9:16 (Shorts, TikTok, Reels)', onclick: () => openVertical(kind, obj) }, v.url ? '📱 9:16 ↻' : '📱 9:16'));
-  if (v.url) frag.append(el('a', { class: 'btn ready', href: v.url, download: '', title: 'Télécharger la version 9:16' }, '📱 9:16 ✓'));
+  if (v.url) {
+    frag.append(el('a', { class: 'btn ready', href: v.url, download: '', title: 'Télécharger la version 9:16' }, '📱 9:16 ✓'));
+    frag.append(el('button', { class: 'icon tiktok', title: 'Partager la version 9:16 vers TikTok', onclick: () => shareToTikTok(kind, obj) }, '📤 TikTok'));
+  }
   return frag;
+}
+
+// Partage vers TikTok : feuille de partage système quand elle sait envoyer un fichier (iPhone, iPad,
+// Safari), sinon Finder + TikTok Studio (upload web) avec le titre copié pour la description.
+const TIKTOK_UPLOAD = 'https://www.tiktok.com/tiktokstudio/upload';
+async function shareToTikTok(kind, obj) {
+  const url = obj.vertical && obj.vertical.url;
+  if (!url) return;
+  const name = decodeURIComponent(url.split('/').pop());
+  try { await navigator.clipboard.writeText(obj.title); } catch (_) { /* presse-papiers indisponible */ }
+  if (navigator.share && navigator.canShare) {
+    try {
+      const blob = await (await fetch(url)).blob();
+      const file = new File([blob], name, { type: 'video/mp4' });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: obj.title, text: obj.title });
+        toast('Partagé via la feuille de partage — choisis TikTok si ce n\'est pas fait.');
+        return;
+      }
+    } catch (err) {
+      if (err && err.name === 'AbortError') return; // l'utilisateur a annulé
+    }
+  }
+  try { await api(`/api/${kind === 'clip' ? 'clips' : 'compilations'}/${obj.id}/reveal?which=vertical`, { method: 'POST' }); } catch (_) { /* pas sur macOS */ }
+  window.open(TIKTOK_UPLOAD, '_blank', 'noopener');
+  toast('Titre copié dans le presse-papiers. Glisse le fichier 9:16 (affiché dans le Finder) dans TikTok Studio.', 8000);
+}
+
+// Petit message temporaire en bas de page
+function toast(msg, ms = 5000) {
+  let t = $('#toast');
+  if (!t) { t = el('div', { id: 'toast', class: 'toast' }); document.body.append(t); }
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(t._timer); t._timer = setTimeout(() => { t.hidden = true; }, ms);
 }
 const verticalWatch = new Set();
 function watchVertical(kind, id) {

@@ -38,6 +38,10 @@ reçoivent un lien symbolique vers le même fichier dans `clips/<tag>/`.
 - **Export vertical 9:16** (Shorts, TikTok, Reels) pour un clip ou une compilation : « fond flou »
   (vidéo entière centrée sur son propre fond flouté) ou « recadrage plein cadre » avec curseur de
   position et aperçu. Sortie 1080×1920 en `<nom>_9x16.mp4`, générée en arrière-plan.
+- **« 📤 TikTok »** sur la version 9:16 : feuille de partage système avec le fichier (iPhone, iPad,
+  Safari — TikTok apparaît dans la liste) ; sur ordinateur, copie le titre, affiche le fichier dans
+  le Finder et ouvre TikTok Studio (upload) pour un glisser-déposer. La publication automatique via
+  l'API TikTok n'est pas intégrée (elle exige une app développeur TikTok validée).
 - **Gérer les tags** : créer des tags à l'avance, supprimer ceux qui sont vides.
 
 **Compilations (lecture à la suite / assemblage)**
