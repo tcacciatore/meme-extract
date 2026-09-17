@@ -19,11 +19,17 @@ yt-dlp ne supporte plus 3.9) et installe `flask` + `yt-dlp`. `ffmpeg` doit être
 2. Repérer le passage dans le lecteur, puis « ⏱ Position actuelle » pour le début et la fin
    (ou taper `1:23`, `83`, `1:23.5`). Raccourcis : `I` début, `O` fin, `P` prévisualiser,
    `Espace` lecture/pause, `←`/`→` ±1 s, `Maj+←/→` ±0,1 s.
-3. Titre + tags (le **premier tag** décide du dossier). « Extraire et télécharger ».
+   **Les deux champs vides = vidéo entière** (téléchargée sans découpe ni ré-encodage) ;
+   un seul vide = depuis le début / jusqu'à la fin.
+3. Titre, **dossier** (créable à la volée) et tags. « Extraire et télécharger ».
 
 Le clip est téléchargé en arrière-plan, découpé précisément (ré-encodage aux bornes),
-et rangé dans `clips/<tag principal>/<titre>_<début>-<fin>_<id>.mp4`. Les autres tags
-reçoivent un lien symbolique vers le même fichier dans `clips/<tag>/`.
+et rangé dans `clips/<dossier>/<titre>_<début>-<fin>_<id>.mp4`.
+
+**Dossiers** : un clip appartient à un dossier (= un répertoire de `clips/`), indépendant des
+tags. « Gérer les dossiers » dans la bibliothèque permet de créer, renommer (le répertoire est
+renommé sur le disque) et supprimer (avec déplacement des clips vers un autre dossier s'il n'est
+pas vide). Un clip se déplace depuis sa fiche ✎ ; la bibliothèque se filtre par dossier.
 
 **Bibliothèque**
 - Filtres par tag en trois états : 1 clic = tag **exigé**, 2 clics = tag **exclu**, 3 clics = neutre.
@@ -77,6 +83,7 @@ reçoivent un lien symbolique vers le même fichier dans `clips/<tag>/`.
 | `POST` | `/api/clips/<id>/usages` · `DELETE /api/usages/<id>` | utilisations |
 | `GET` | `/api/projects` | projets connus |
 | `GET/POST/DELETE` | `/api/tags[/<name>]` | tags |
+| `GET/POST` | `/api/folders` · `PUT/DELETE /api/folders/<id>[?move_to=]` | dossiers |
 | `GET/POST` | `/api/compilations` · `GET/DELETE /api/compilations/<id>` | compilations (`{clip_ids, title, shuffle}`) |
 | `GET` | `/api/export[?files=1]` · `POST /api/import` | partage |
 | `GET` | `/media/<chemin>` | fichiers |

@@ -80,6 +80,12 @@ def init_db():
                 id   INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE
             );
+            CREATE TABLE IF NOT EXISTS folders (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT NOT NULL UNIQUE,
+                dirname    TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS compilations (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 title      TEXT NOT NULL,
@@ -105,6 +111,7 @@ def init_db():
             """
         )
         conn.executemany("INSERT OR IGNORE INTO tags(name) VALUES (?)", [(t,) for t in DEFAULT_TAGS])
+        migrate_folders(conn)
         # Un redémarrage pendant un téléchargement laisse des clips bloqués : on les marque en erreur.
         conn.execute(
             "UPDATE clips SET status='error', error='Interrompu (serveur redémarré)' "
@@ -114,6 +121,41 @@ def init_db():
             "UPDATE compilations SET status='error', error='Interrompu (serveur redémarré)' "
             "WHERE status IN ('pending','building')"
         )
+
+
+def migrate_folders(conn):
+    """Colonnes folder_id / full, puis reprise des dossiers existants (anciennement = 1er tag)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(clips)")}
+    if "folder_id" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN folder_id INTEGER REFERENCES folders(id)")
+    if "full" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN full INTEGER NOT NULL DEFAULT 0")
+    now = datetime.now().isoformat(timespec="seconds")
+    tag_names = {tag_dirname(r["name"]): r["name"] for r in conn.execute("SELECT name FROM tags")}
+    for row in conn.execute("SELECT id, path FROM clips WHERE folder_id IS NULL AND path IS NOT NULL").fetchall():
+        dirname = row["path"].split("/")[0]
+        if dirname == COMPIL_DIR_NAME:
+            continue
+        f = conn.execute("SELECT id FROM folders WHERE dirname = ?", (dirname,)).fetchone()
+        if not f:
+            conn.execute(
+                "INSERT INTO folders(name, dirname, created_at) VALUES (?,?,?)",
+                (tag_names.get(dirname, dirname), dirname, now),
+            )
+            f = conn.execute("SELECT id FROM folders WHERE dirname = ?", (dirname,)).fetchone()
+        conn.execute("UPDATE clips SET folder_id = ? WHERE id = ?", (f["id"], row["id"]))
+    if not conn.execute("SELECT 1 FROM folders LIMIT 1").fetchone():
+        conn.execute("INSERT INTO folders(name, dirname, created_at) VALUES ('Général', 'general', ?)", (now,))
+    # Les liens symboliques par tag de l'ancien modèle casseraient au renommage d'un dossier : on les retire
+    for link in CLIPS_DIR.glob("*/*"):
+        if link.is_symlink():
+            link.unlink()
+    # Répertoires vides inconnus de la base (anciens dossiers de tags secondaires)
+    known = {r["dirname"] for r in conn.execute("SELECT dirname FROM folders")}
+    for d in CLIPS_DIR.iterdir():
+        if d.is_dir() and not d.name.startswith("_") and d.name not in known:
+            if all(f.name == ".DS_Store" for f in d.iterdir()):
+                shutil.rmtree(d, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------- helpers
@@ -173,9 +215,13 @@ def clip_to_dict(conn, row) -> dict:
     ]
     with PROGRESS_LOCK:
         progress = PROGRESS.get(row["id"])
+    folder = conn.execute("SELECT id, name, dirname FROM folders WHERE id = ?", (row["folder_id"],)).fetchone() if row["folder_id"] else None
     return {
         "id": row["id"],
         "title": row["title"],
+        "folder_id": folder["id"] if folder else None,
+        "folder": folder["name"] if folder else None,
+        "full": bool(row["full"]),
         "source_url": row["source_url"],
         "source_title": row["source_title"],
         "video_id": row["video_id"],
@@ -330,6 +376,73 @@ def start_vertical(kind: str, obj_id: int, rel_path: str, data: dict):
     return jsonify({"ok": True, "status": "running"}), 202
 
 
+def folder_to_dict(conn, row) -> dict:
+    n = conn.execute("SELECT COUNT(*) FROM clips WHERE folder_id = ?", (row["id"],)).fetchone()[0]
+    return {"id": row["id"], "name": row["name"], "dirname": row["dirname"], "path": str(CLIPS_DIR / row["dirname"]), "count": n}
+
+
+def unique_dirname(conn, name: str, exclude_id: Optional[int] = None) -> str:
+    base = slugify(name, 40) or "dossier"
+    if base.startswith("_"):
+        base = "d" + base
+    cand, i = base, 2
+    while True:
+        taken = conn.execute("SELECT id FROM folders WHERE dirname = ? AND id IS NOT ?", (cand, exclude_id)).fetchone()
+        if not taken and not (CLIPS_DIR / cand).exists():
+            return cand
+        if taken and taken["id"] == exclude_id:
+            return cand
+        cand = f"{base}-{i}"
+        i += 1
+
+
+def get_or_create_folder(conn, name: str) -> int:
+    name = re.sub(r"\s+", " ", name).strip() or "Général"
+    row = conn.execute("SELECT id FROM folders WHERE lower(name) = lower(?)", (name,)).fetchone()
+    if row:
+        return row["id"]
+    dirname = unique_dirname(conn, name)
+    (CLIPS_DIR / dirname).mkdir(parents=True, exist_ok=True)
+    cur = conn.execute(
+        "INSERT INTO folders(name, dirname, created_at) VALUES (?,?,?)",
+        (name, dirname, datetime.now().isoformat(timespec="seconds")),
+    )
+    return cur.lastrowid
+
+
+def default_folder_id(conn) -> int:
+    row = conn.execute("SELECT id FROM folders ORDER BY id LIMIT 1").fetchone()
+    return row["id"] if row else get_or_create_folder(conn, "Général")
+
+
+def clip_files(rel_path: str) -> List[Path]:
+    """Fichier principal + dérivés existants (mp3/wav/gif/9:16)."""
+    main = CLIPS_DIR / rel_path
+    out = [main] if main.exists() else []
+    out += [derivative_path(rel_path, f) for f in EXPORT_FORMATS if derivative_path(rel_path, f).exists()]
+    if vertical_path(rel_path).exists():
+        out.append(vertical_path(rel_path))
+    return out
+
+
+def move_clip_to_folder(conn, clip_row, folder_id: int):
+    """Déplace les fichiers du clip dans le répertoire du dossier et met à jour son chemin."""
+    folder = conn.execute("SELECT * FROM folders WHERE id = ?", (folder_id,)).fetchone()
+    if not folder:
+        raise ValueError("dossier inconnu")
+    if clip_row["path"]:
+        dest_dir = CLIPS_DIR / folder["dirname"]
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for f in clip_files(clip_row["path"]):
+            target = dest_dir / f.name
+            if target != f:
+                shutil.move(str(f), str(target))
+        new_rel = (Path(folder["dirname"]) / Path(clip_row["path"]).name).as_posix()
+        conn.execute("UPDATE clips SET folder_id = ?, path = ? WHERE id = ?", (folder_id, new_rel, clip_row["id"]))
+    else:
+        conn.execute("UPDATE clips SET folder_id = ? WHERE id = ?", (folder_id, clip_row["id"]))
+
+
 def set_progress(clip_id: int, message: Optional[str]):
     if message is not None:
         message = ANSI_RE.sub("", message)
@@ -383,16 +496,17 @@ def run_download(clip_id: int):
         clip = clip_to_dict(conn, row)
         conn.execute("UPDATE clips SET status='downloading' WHERE id = ?", (clip_id,))
 
-    tags = clip["tags"] or ["non-classé"]
-    primary_dir = CLIPS_DIR / tag_dirname(tags[0])
+    with db() as conn:
+        folder_id = row["folder_id"] or default_folder_id(conn)
+        if not row["folder_id"]:
+            conn.execute("UPDATE clips SET folder_id = ? WHERE id = ?", (folder_id, clip_id))
+        folder = conn.execute("SELECT dirname FROM folders WHERE id = ?", (folder_id,)).fetchone()
+    primary_dir = CLIPS_DIR / folder["dirname"]
     primary_dir.mkdir(parents=True, exist_ok=True)
 
-    base_name = "{}_{}-{}_{}".format(
-        slugify(clip["title"]),
-        fmt_time_file(clip["start"]),
-        fmt_time_file(clip["end"]),
-        clip["video_id"] or clip_id,
-    )
+    full = bool(row["full"])
+    span = "entier" if full else f"{fmt_time_file(clip['start'])}-{fmt_time_file(clip['end'])}"
+    base_name = f"{slugify(clip['title'])}_{span}_{clip['video_id'] or clip_id}"
     # Nettoie d'éventuels restes d'une tentative précédente
     for old in glob.glob(str(primary_dir / (base_name + ".*"))):
         os.remove(old)
@@ -415,8 +529,6 @@ def run_download(clip_id: int):
         ),
         "merge_output_format": "mp4",
         "outtmpl": str(primary_dir / (base_name + ".%(ext)s")),
-        "download_ranges": download_range_func(None, [(clip["start"], clip["end"])]),
-        "force_keyframes_at_cuts": True,  # coupe précise (ré-encodage aux bornes)
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
@@ -426,6 +538,10 @@ def run_download(clip_id: int):
         "postprocessor_hooks": [pp_hook],
         "postprocessors": [{"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"}],
     }
+
+    if not full:
+        opts["download_ranges"] = download_range_func(None, [(clip["start"], clip["end"])])
+        opts["force_keyframes_at_cuts"] = True  # coupe précise (ré-encodage aux bornes)
 
     set_progress(clip_id, "Préparation…")
     try:
@@ -444,19 +560,16 @@ def run_download(clip_id: int):
                 raise RuntimeError("fichier de sortie introuvable après téléchargement")
             final = Path(candidates[-1])
 
-        # Un lien symbolique dans le dossier de chaque tag secondaire
-        for extra in tags[1:]:
-            d = CLIPS_DIR / tag_dirname(extra)
-            d.mkdir(parents=True, exist_ok=True)
-            link = d / final.name
-            if not link.exists() and not link.is_symlink():
-                os.symlink(os.path.relpath(final, d), link)
-
         rel = final.relative_to(CLIPS_DIR).as_posix()
         with db() as conn:
             conn.execute(
                 "UPDATE clips SET status='done', path=?, error=NULL WHERE id = ?", (rel, clip_id)
             )
+            if full or clip["end"] <= clip["start"]:
+                # Durée réelle du fichier (la source n'annonçait pas toujours sa durée)
+                real = ffprobe_info(final)["duration"]
+                if real:
+                    conn.execute('UPDATE clips SET start = 0, "end" = ? WHERE id = ?', (round(real, 2), clip_id))
     except Exception as exc:  # noqa: BLE001
         msg = ANSI_RE.sub("", str(exc)).replace("ERROR: ", "")[:500]
         with db() as conn:
@@ -689,6 +802,9 @@ def api_clips():
     if status:
         where.append("c.status = ?")
         params.append(status)
+    if request.args.get("folder"):
+        where.append("c.folder_id = ?")
+        params.append(int(request.args["folder"]))
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY " + SORTS.get(sort, SORTS["date"]).format(o=order)
@@ -703,13 +819,8 @@ def api_create_clip():
     url = (data.get("url") or "").strip()
     if not url:
         return jsonify({"error": "URL manquante"}), 400
-    try:
-        start = parse_time(data.get("start", 0))
-        end = parse_time(data.get("end"))
-    except (ValueError, TypeError):
-        return jsonify({"error": "Début/fin invalides (ex : 1:23 ou 83)"}), 400
-    if end <= start:
-        return jsonify({"error": "La fin doit être après le début"}), 400
+    raw_start = str(data.get("start") or "").strip()
+    raw_end = str(data.get("end") or "").strip()
     tags = clean_tags(data.get("tags"))
     if not tags:
         return jsonify({"error": "Ajoute au moins un tag"}), 400
@@ -721,11 +832,29 @@ def api_create_clip():
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"Impossible de lire la vidéo : {str(exc)[:300]}"}), 400
     title = (data.get("title") or info.get("title") or "clip").strip()
+    duration = float(info.get("duration") or 0)
+
+    # Bornes vides = début / fin de la vidéo ; les deux vides = vidéo entière, sans découpe
+    full = not raw_start and not raw_end
+    try:
+        start = parse_time(raw_start) if raw_start else 0.0
+        end = parse_time(raw_end) if raw_end else duration
+    except (ValueError, TypeError):
+        return jsonify({"error": "Début/fin invalides (ex : 1:23 ou 83)"}), 400
+    if not full and not raw_end and not duration:
+        return jsonify({"error": "Durée de la vidéo inconnue : indique une fin"}), 400
+    if not full and end <= start:
+        return jsonify({"error": "La fin doit être après le début"}), 400
 
     with db() as conn:
+        folder_id = data.get("folder_id")
+        if data.get("folder_name"):
+            folder_id = get_or_create_folder(conn, str(data["folder_name"]))
+        if not folder_id or not conn.execute("SELECT 1 FROM folders WHERE id = ?", (folder_id,)).fetchone():
+            folder_id = default_folder_id(conn)
         cur = conn.execute(
-            'INSERT INTO clips(title, source_url, source_title, video_id, thumbnail, start, "end", status, created_at)'
-            " VALUES (?,?,?,?,?,?,?,'pending',?)",
+            'INSERT INTO clips(title, source_url, source_title, video_id, thumbnail, start, "end", full, folder_id, status, created_at)'
+            " VALUES (?,?,?,?,?,?,?,?,?,'pending',?)",
             (
                 title,
                 info.get("webpage_url") or url,
@@ -734,6 +863,8 @@ def api_create_clip():
                 info.get("thumbnail"),
                 start,
                 end,
+                1 if full else 0,
+                folder_id,
                 datetime.now().isoformat(timespec="seconds"),
             ),
         )
@@ -769,20 +900,13 @@ def api_update_clip(clip_id):
             if not tags:
                 return jsonify({"error": "Un clip doit garder au moins un tag"}), 400
             set_clip_tags(conn, clip_id, tags)
-            # Met à jour les liens symboliques dans les dossiers de tags
-            if row["path"]:
-                main = CLIPS_DIR / row["path"]
-                for link in CLIPS_DIR.glob(f"*/{main.name}"):
-                    if link.is_symlink():
-                        link.unlink()
-                for extra in tags:
-                    d = CLIPS_DIR / tag_dirname(extra)
-                    if d == main.parent:
-                        continue
-                    d.mkdir(parents=True, exist_ok=True)
-                    link = d / main.name
-                    if not link.exists() and not link.is_symlink():
-                        os.symlink(os.path.relpath(main, d), link)
+        if data.get("folder_id") and int(data["folder_id"]) != row["folder_id"]:
+            if row["status"] in ("pending", "downloading"):
+                return jsonify({"error": "Attends la fin du téléchargement pour déplacer ce clip"}), 400
+            try:
+                move_clip_to_folder(conn, row, int(data["folder_id"]))
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
         row = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
         return jsonify(clip_to_dict(conn, row))
 
@@ -808,6 +932,94 @@ def api_delete_clip(clip_id):
             abort(404)
         remove_clip_files(row["path"])
         conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+    return jsonify({"ok": True})
+
+
+# ---- dossiers
+
+@app.get("/api/folders")
+def api_folders():
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM folders ORDER BY lower(name)").fetchall()
+        return jsonify([folder_to_dict(conn, r) for r in rows])
+
+
+@app.post("/api/folders")
+def api_create_folder():
+    name = re.sub(r"\s+", " ", (request.get_json(silent=True) or {}).get("name", "")).strip()
+    if not name:
+        return jsonify({"error": "Nom de dossier vide"}), 400
+    with db() as conn:
+        if conn.execute("SELECT 1 FROM folders WHERE lower(name) = lower(?)", (name,)).fetchone():
+            return jsonify({"error": "Ce dossier existe déjà"}), 400
+        fid = get_or_create_folder(conn, name)
+        row = conn.execute("SELECT * FROM folders WHERE id = ?", (fid,)).fetchone()
+        return jsonify(folder_to_dict(conn, row)), 201
+
+
+@app.put("/api/folders/<int:folder_id>")
+def api_rename_folder(folder_id):
+    name = re.sub(r"\s+", " ", (request.get_json(silent=True) or {}).get("name", "")).strip()
+    if not name:
+        return jsonify({"error": "Nom de dossier vide"}), 400
+    with db() as conn:
+        row = conn.execute("SELECT * FROM folders WHERE id = ?", (folder_id,)).fetchone()
+        if not row:
+            abort(404)
+        dup = conn.execute("SELECT id FROM folders WHERE lower(name) = lower(?) AND id != ?", (name, folder_id)).fetchone()
+        if dup:
+            return jsonify({"error": "Un autre dossier porte déjà ce nom"}), 400
+        busy = conn.execute(
+            "SELECT 1 FROM clips WHERE folder_id = ? AND status IN ('pending','downloading')", (folder_id,)
+        ).fetchone()
+        if busy:
+            return jsonify({"error": "Un téléchargement est en cours dans ce dossier, réessaie ensuite"}), 400
+        new_dir = unique_dirname(conn, name, exclude_id=folder_id)
+        old_dir = row["dirname"]
+        if new_dir != old_dir:
+            src, dst = CLIPS_DIR / old_dir, CLIPS_DIR / new_dir
+            if src.exists():
+                src.rename(dst)
+            else:
+                dst.mkdir(parents=True, exist_ok=True)
+            conn.execute(
+                "UPDATE clips SET path = ? || substr(path, ?) WHERE folder_id = ? AND path IS NOT NULL",
+                (new_dir + "/", len(old_dir) + 2, folder_id),
+            )
+        conn.execute("UPDATE folders SET name = ?, dirname = ? WHERE id = ?", (name, new_dir, folder_id))
+        row = conn.execute("SELECT * FROM folders WHERE id = ?", (folder_id,)).fetchone()
+        return jsonify(folder_to_dict(conn, row))
+
+
+@app.delete("/api/folders/<int:folder_id>")
+def api_delete_folder(folder_id):
+    """Supprime un dossier. S'il contient des clips, ?move_to=<id> les déplace d'abord."""
+    move_to = request.args.get("move_to", type=int)
+    with db() as conn:
+        row = conn.execute("SELECT * FROM folders WHERE id = ?", (folder_id,)).fetchone()
+        if not row:
+            abort(404)
+        if conn.execute("SELECT COUNT(*) FROM folders").fetchone()[0] <= 1:
+            return jsonify({"error": "Impossible de supprimer le dernier dossier"}), 400
+        clips = conn.execute("SELECT * FROM clips WHERE folder_id = ?", (folder_id,)).fetchall()
+        if clips:
+            if not move_to or move_to == folder_id:
+                return jsonify({"error": f"Ce dossier contient {len(clips)} clip(s) : choisis un dossier de destination", "count": len(clips)}), 400
+            if any(c["status"] in ("pending", "downloading") for c in clips):
+                return jsonify({"error": "Un téléchargement est en cours dans ce dossier, réessaie ensuite"}), 400
+            for c in clips:
+                move_clip_to_folder(conn, c, move_to)
+        conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+        d = CLIPS_DIR / row["dirname"]
+        if d.exists():
+            leftovers = [f for f in d.iterdir() if f.name != ".DS_Store"]
+            if leftovers:
+                # Des fichiers inconnus de la base : on les garde dans un dossier "_orphelins"
+                orphans = CLIPS_DIR / "_orphelins"
+                orphans.mkdir(exist_ok=True)
+                for f in leftovers:
+                    shutil.move(str(f), str(orphans / f.name))
+            shutil.rmtree(d, ignore_errors=True)
     return jsonify({"ok": True})
 
 
@@ -904,6 +1116,8 @@ def library_manifest(conn, with_files: bool) -> dict:
             "start": c["start"],
             "end": c["end"],
             "tags": c["tags"],
+            "folder": c["folder"],
+            "full": c["full"],
             "file": ("videos/" + c["path"]) if with_files and c["path"] else None,
             "created_at": c["created_at"],
         })
@@ -984,13 +1198,14 @@ def api_import_library():
                 if clip_exists(conn, c.get("video_id"), url, start, end):
                     skipped += 1
                     continue
+                folder_id = get_or_create_folder(conn, c.get("folder") or "Importés")
                 cur = conn.execute(
-                    'INSERT INTO clips(title, source_url, source_title, video_id, thumbnail, start, "end", status, created_at)'
-                    " VALUES (?,?,?,?,?,?,?,'pending',?)",
+                    'INSERT INTO clips(title, source_url, source_title, video_id, thumbnail, start, "end", full, folder_id, status, created_at)'
+                    " VALUES (?,?,?,?,?,?,?,?,?,'pending',?)",
                     (
                         (c.get("title") or c.get("source_title") or "clip").strip(),
                         url, c.get("source_title"), c.get("video_id"), c.get("thumbnail"),
-                        start, end, datetime.now().isoformat(timespec="seconds"),
+                        start, end, 1 if c.get("full") else 0, folder_id, datetime.now().isoformat(timespec="seconds"),
                     ),
                 )
                 clip_id = cur.lastrowid
@@ -999,17 +1214,12 @@ def api_import_library():
                 member = c.get("file")
                 if zf is not None and member and member in zf.namelist():
                     # Vidéo fournie dans le zip : on la copie au lieu de la re-télécharger
-                    primary_dir = CLIPS_DIR / tag_dirname(tags[0])
+                    dirname = conn.execute("SELECT dirname FROM folders WHERE id = ?", (folder_id,)).fetchone()["dirname"]
+                    primary_dir = CLIPS_DIR / dirname
                     primary_dir.mkdir(parents=True, exist_ok=True)
                     dest = primary_dir / Path(member).name
                     with zf.open(member) as src, open(dest, "wb") as out:
                         shutil.copyfileobj(src, out)
-                    for extra in tags[1:]:
-                        d = CLIPS_DIR / tag_dirname(extra)
-                        d.mkdir(parents=True, exist_ok=True)
-                        link = d / dest.name
-                        if not link.exists() and not link.is_symlink():
-                            os.symlink(os.path.relpath(dest, d), link)
                     conn.execute(
                         "UPDATE clips SET status='done', path=? WHERE id = ?",
                         (dest.relative_to(CLIPS_DIR).as_posix(), clip_id),

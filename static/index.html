@@ -44,13 +44,13 @@
       <div class="grid-2">
         <label>Début
           <div class="row">
-            <input id="start" placeholder="0:12" autocomplete="off">
+            <input id="start" placeholder="(début de la vidéo)" autocomplete="off">
             <button type="button" class="ghost" data-mark="start" title="Prendre la position du lecteur (I)">⏱ Position actuelle</button>
           </div>
         </label>
         <label>Fin
           <div class="row">
-            <input id="end" placeholder="0:18" autocomplete="off">
+            <input id="end" placeholder="(fin de la vidéo)" autocomplete="off">
             <button type="button" class="ghost" data-mark="end" title="Prendre la position du lecteur (O)">⏱ Position actuelle</button>
           </div>
         </label>
@@ -59,14 +59,26 @@
         <span id="cut-duration" class="muted"></span>
         <button type="button" class="ghost" id="btn-preview" title="Lire le passage dans le lecteur">▶ Prévisualiser le passage</button>
       </div>
+      <p class="muted small">Laisse les deux champs vides pour télécharger <b>la vidéo entière</b> (sans découpe ni ré-encodage). Un seul champ vide = depuis le début / jusqu'à la fin.</p>
     </section>
 
     <section class="card" id="section-tags" hidden>
-      <h2>3. Titre et tags</h2>
+      <h2>3. Titre, dossier et tags</h2>
       <label>Titre du clip
         <input id="title" placeholder="ex : Le mec qui tombe de la chaise" autocomplete="off">
       </label>
-      <label>Tags <span class="muted small">(Entrée ou virgule pour valider — le 1er tag donne le dossier)</span>
+      <label>Dossier <span class="muted small">(répertoire sur le disque où sera rangé le fichier)</span>
+        <div class="row">
+          <select id="folder"></select>
+          <button type="button" class="ghost" id="folder-new-btn">＋ Nouveau dossier</button>
+        </div>
+        <div class="row" id="folder-new-row" hidden>
+          <input id="folder-new" placeholder="nom du nouveau dossier (ex : Sketchs, Foot, Politique)" autocomplete="off">
+          <button type="button" id="folder-new-ok">Créer</button>
+          <button type="button" class="ghost" id="folder-new-cancel">Annuler</button>
+        </div>
+      </label>
+      <label>Tags <span class="muted small">(Entrée ou virgule pour valider)</span>
         <div id="tag-editor" class="tag-editor">
           <div id="tag-chips" class="chips"></div>
           <input id="tag-input" placeholder="drôle, triste, wtf…" autocomplete="off" list="tag-suggestions">
@@ -90,6 +102,7 @@
     <section class="card">
       <div class="row wrap">
         <input id="search" type="search" placeholder="Rechercher dans les titres et projets…" autocomplete="off">
+        <select id="folder-filter" title="Dossier"><option value="">Tous les dossiers</option></select>
         <select id="sort" title="Tri">
           <option value="date:desc">Plus récents</option>
           <option value="date:asc">Plus anciens</option>
@@ -104,6 +117,15 @@
       </div>
       <div id="tag-filter" class="chips filter"></div>
       <p class="muted small filter-help">Clique sur un tag pour l'<b>exiger</b> (rose), une 2ᵉ fois pour l'<b>exclure</b> (barré), une 3ᵉ fois pour l'oublier. Plusieurs tags exigés = tous requis.</p>
+      <details class="manage-tags">
+        <summary>Gérer les dossiers</summary>
+        <form id="new-folder-form" class="row">
+          <input id="new-folder" placeholder="nouveau dossier" autocomplete="off">
+          <button type="submit">+ Créer</button>
+        </form>
+        <p class="muted small">Renommer un dossier renomme le répertoire sur le disque. Supprimer un dossier qui contient des clips demande un dossier de destination.</p>
+        <div id="folder-manage-list" class="folder-list"></div>
+      </details>
       <details class="manage-tags">
         <summary>Gérer les tags</summary>
         <form id="new-tag-form" class="row">
@@ -186,6 +208,7 @@
     <form method="dialog" class="card" id="edit-form">
       <h2>Modifier le clip</h2>
       <label>Titre <input id="edit-title" autocomplete="off"></label>
+      <label>Dossier <select id="edit-folder"></select></label>
       <label>Tags
         <div class="tag-editor">
           <div id="edit-chips" class="chips"></div>

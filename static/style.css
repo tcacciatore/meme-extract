@@ -180,3 +180,12 @@ button.tiktok { border-color: #69c9d0; }
 button.tiktok:hover { border-color: #ee1d52; color: #ee1d52; }
 .toast { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); z-index: 60; background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; max-width: 90vw; box-shadow: 0 8px 30px rgba(0,0,0,.5); font-size: 14px; }
+
+label > select, label > .row > select { width: 100%; margin-top: 4px; }
+.folder-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.folder-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--border); font-size: 14px; }
+.folder-row .name { font-weight: 600; }
+.folder-row .path { color: var(--muted); font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-row input { padding: 6px 8px; font-size: 13px; width: 200px; }
+.folder-row select { padding: 6px 8px; font-size: 13px; }
+.clip .meta .folder { color: var(--accent-2); }

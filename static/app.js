@@ -66,6 +66,75 @@ async function refreshTags() {
   if (changed) { saveSelection(); renderCompileBar(); }
 }
 
+// ------------------------------------------------------------------ dossiers
+let folders = [];
+async function refreshFolders() {
+  folders = await api('/api/folders');
+  const opts = () => folders.map((f) => el('option', { value: f.id }, `${f.name} (${f.count})`));
+  const keep = (sel, fallback) => { const v = sel.value; sel.replaceChildren(...opts()); sel.value = folders.some((f) => String(f.id) === v) ? v : (fallback || ''); };
+  let last = null; try { last = localStorage.getItem('lastFolder'); } catch (_) { /* ignore */ }
+  keep($('#folder'), last && folders.some((f) => String(f.id) === last) ? last : (folders[0] ? String(folders[0].id) : ''));
+  keep($('#edit-folder'));
+  const ff = $('#folder-filter'); const fv = ff.value;
+  ff.replaceChildren(el('option', { value: '' }, 'Tous les dossiers'), ...opts());
+  ff.value = folders.some((f) => String(f.id) === fv) ? fv : '';
+  renderFolderManager();
+}
+$('#folder').addEventListener('change', () => { try { localStorage.setItem('lastFolder', $('#folder').value); } catch (_) { /* ignore */ } });
+$('#folder-new-btn').addEventListener('click', () => { $('#folder-new-row').hidden = false; $('#folder-new').focus(); });
+$('#folder-new-cancel').addEventListener('click', () => { $('#folder-new-row').hidden = true; $('#folder-new').value = ''; });
+async function createFolderFromAdd() {
+  const name = $('#folder-new').value.trim(); if (!name) return;
+  try {
+    const f = await api('/api/folders', { method: 'POST', body: JSON.stringify({ name }) });
+    await refreshFolders();
+    $('#folder').value = f.id; $('#folder').dispatchEvent(new Event('change'));
+    $('#folder-new-row').hidden = true; $('#folder-new').value = '';
+  } catch (err) { alert(err.message); }
+}
+$('#folder-new-ok').addEventListener('click', createFolderFromAdd);
+$('#folder-new').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); createFolderFromAdd(); } });
+
+$('#new-folder-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $('#new-folder').value.trim(); if (!name) return;
+  try { await api('/api/folders', { method: 'POST', body: JSON.stringify({ name }) }); $('#new-folder').value = ''; await refreshFolders(); }
+  catch (err) { alert(err.message); }
+});
+function renderFolderManager() {
+  $('#folder-manage-list').replaceChildren(...folders.map((f) => {
+    const row = el('div', { class: 'folder-row' });
+    const name = el('span', { class: 'name' }, `${f.name} (${f.count})`);
+    const path = el('span', { class: 'path', title: f.path }, f.path);
+    const renameBtn = el('button', { class: 'icon', title: 'Renommer', onclick: () => {
+      const input = el('input', { value: f.name, autocomplete: 'off' });
+      const ok = el('button', { class: 'icon', onclick: async () => {
+        try { await api(`/api/folders/${f.id}`, { method: 'PUT', body: JSON.stringify({ name: input.value }) }); await refreshFolders(); loadLibrary(); }
+        catch (err) { alert(err.message); }
+      } }, '✓');
+      const cancel = el('button', { class: 'icon ghost', onclick: renderFolderManager }, '✕');
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ok.click(); } if (e.key === 'Escape') renderFolderManager(); });
+      row.replaceChildren(input, ok, cancel); input.focus(); input.select();
+    } }, '✎ Renommer');
+    const delBtn = el('button', { class: 'icon danger', title: 'Supprimer', disabled: folders.length <= 1, onclick: () => {
+      if (f.count === 0) {
+        const ok = el('button', { class: 'icon danger armed', onclick: async () => {
+          try { await api(`/api/folders/${f.id}`, { method: 'DELETE' }); await refreshFolders(); loadLibrary(); } catch (err) { alert(err.message); }
+        } }, 'Supprimer le dossier vide ?');
+        row.replaceChildren(name, ok, el('button', { class: 'icon ghost', onclick: renderFolderManager }, '✕'));
+        return;
+      }
+      const dest = el('select', {}, ...folders.filter((g) => g.id !== f.id).map((g) => el('option', { value: g.id }, g.name)));
+      const ok = el('button', { class: 'icon danger armed', onclick: async () => {
+        try { await api(`/api/folders/${f.id}?move_to=${dest.value}`, { method: 'DELETE' }); await refreshFolders(); loadLibrary(); } catch (err) { alert(err.message); }
+      } }, 'Déplacer et supprimer');
+      row.replaceChildren(name, el('span', { class: 'muted small' }, `déplacer ses ${f.count} clip(s) vers`), dest, ok, el('button', { class: 'icon ghost', onclick: renderFolderManager }, '✕'));
+    } }, '🗑');
+    row.append(name, path, renameBtn, delBtn);
+    return row;
+  }));
+}
+
 // ------------------------------------------------------------------ éditeur de tags (réutilisable)
 function makeTagEditor(chipsEl, inputEl) {
   let tags = [];
@@ -153,6 +222,7 @@ $('#url-form').addEventListener('submit', async (e) => {
     $('#section-cut').hidden = false;
     $('#section-tags').hidden = false;
     if (!$('#title').value) $('#title').value = sourceInfo.title || '';
+    updateCutInfo();
     if (sourceInfo.is_youtube && sourceInfo.id) await mountPlayer(sourceInfo.id);
     else { $('#player-wrap').hidden = true; if (player) { player.destroy(); player = null; $('#player-wrap').append(el('div', { id: 'player' })); } }
   } catch (err) {
@@ -164,8 +234,13 @@ $('#url-form').addEventListener('submit', async (e) => {
 
 // ------------------------------------------------------------------ étape 2 : bornes
 function updateCutInfo() {
-  const a = parseTime($('#start').value), b = parseTime($('#end').value);
-  $('#cut-duration').textContent = (!isNaN(a) && !isNaN(b) && b > a) ? `Durée du clip : ${(b - a).toFixed(1)} s` : '';
+  const sa = $('#start').value.trim(), sb = $('#end').value.trim();
+  const total = sourceInfo && sourceInfo.duration;
+  const a = sa ? parseTime(sa) : 0, b = sb ? parseTime(sb) : (total || NaN);
+  let txt = '';
+  if (!sa && !sb) txt = total ? `Vidéo entière (${fmtTime(total, 0)}) — sans découpe` : 'Vidéo entière — sans découpe';
+  else if (!isNaN(a) && !isNaN(b) && b > a) txt = `Durée du clip : ${(b - a).toFixed(1)} s` + (!sa ? ' (depuis le début)' : '') + (!sb ? " (jusqu'à la fin)" : '');
+  $('#cut-duration').textContent = txt;
 }
 ['#start', '#end'].forEach((s) => $(s).addEventListener('input', updateCutInfo));
 document.querySelectorAll('[data-mark]').forEach((b) => b.addEventListener('click', () => mark(b.dataset.mark)));
@@ -206,8 +281,12 @@ $('#btn-submit').addEventListener('click', async () => {
     url: $('#url').value.trim(), start: $('#start').value, end: $('#end').value,
     title: $('#title').value.trim(), tags: addTags.get(), info: sourceInfo,
   };
-  const a = parseTime(payload.start), b = parseTime(payload.end);
-  if (isNaN(a) || isNaN(b) || b <= a) return showSubmitError('Indique un début et une fin valides (ex : 1:23).');
+  payload.folder_id = Number($('#folder').value) || null;
+  const sa = payload.start.trim(), sb = payload.end.trim();
+  if (sa || sb) {
+    const a = sa ? parseTime(sa) : 0, b = sb ? parseTime(sb) : (sourceInfo && sourceInfo.duration) || NaN;
+    if (isNaN(a) || isNaN(b) || b <= a) return showSubmitError('Bornes invalides (ex : 1:23). Laisse les deux vides pour la vidéo entière.');
+  }
   if (!payload.tags.length) return showSubmitError('Ajoute au moins un tag.');
   $('#btn-submit').disabled = true;
   try {
@@ -217,7 +296,7 @@ $('#btn-submit').addEventListener('click', async () => {
     $('#section-queue').hidden = false;
     // Prêt pour un autre passage de la même vidéo : on vide seulement les bornes
     $('#start').value = ''; $('#end').value = ''; updateCutInfo();
-    refreshTags();
+    refreshTags(); refreshFolders();
     startPolling();
   } catch (err) { showSubmitError(err.message); }
   finally { $('#btn-submit').disabled = false; }
@@ -233,7 +312,7 @@ function renderQueue() {
   $('#queue').replaceChildren(...items.map((c) => el('li', {},
     el('div', { class: 'info' },
       el('div', { class: 't' }, c.title),
-      el('div', { class: 'muted small' }, `${fmtTime(c.start)} → ${fmtTime(c.end)} · ${c.tags.join(', ')}`,
+      el('div', { class: 'muted small' }, `${c.full ? 'vidéo entière' : `${fmtTime(c.start)} → ${fmtTime(c.end)}`} · ${c.folder ? `📁 ${c.folder} · ` : ''}${c.tags.join(', ')}`,
         c.status === 'error' ? el('span', { class: 'error' }, ` — ${c.error}`) : null,
         c.status === 'done' && c.path ? ` — ${c.path}` : null)),
     el('span', { class: `status ${c.status}` }, c.progress || STATUS_LABEL[c.status] || c.status),
@@ -284,6 +363,7 @@ let searchTimer = null;
 $('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadLibrary, 250); });
 $('#only-done').addEventListener('change', loadLibrary);
 $('#sort').addEventListener('change', loadLibrary);
+$('#folder-filter').addEventListener('change', loadLibrary);
 $('#btn-refresh').addEventListener('click', () => { refreshTags(); loadLibrary(); });
 
 async function refreshProjects() {
@@ -299,6 +379,7 @@ async function loadLibrary() {
   if ($('#only-done').checked) params.set('status', 'done');
   const [sort, order] = $('#sort').value.split(':');
   params.set('sort', sort); params.set('order', order);
+  if ($('#folder-filter').value) params.set('folder', $('#folder-filter').value);
   const [clips] = await Promise.all([api(`/api/clips?${params}`), refreshProjects(), loadCompilations()]);
   lastClips = clips;
   const nDone = clips.filter((c) => c.status === 'done').length;
@@ -316,6 +397,7 @@ function describeFilter() {
   if (includeTags.size) parts.push([...includeTags].join(' + '));
   if (excludeTags.size) parts.push('sans ' + [...excludeTags].join(', '));
   const q = $('#search').value.trim(); if (q) parts.push(`« ${q} »`);
+  const ff = $('#folder-filter'); if (ff.value) parts.push(`📁 ${ff.options[ff.selectedIndex].textContent.replace(/ \(\d+\)$/, '')}`);
   return parts.join(', ');
 }
 
@@ -334,8 +416,9 @@ function renderClip(c) {
       el('div', { class: 'title' }, c.title),
       el('div', { class: 'chips' }, ...c.tags.map((t, i) => el('span', { class: 'chip' + (i === 0 ? ' primary-tag' : ''), onclick: () => setTag(t), style: 'cursor:pointer' }, t))),
       el('div', { class: 'meta' },
+        c.folder ? el('span', { class: 'folder', title: 'Dossier' }, `📁 ${c.folder}`) : null,
         el('span', {}, `${c.duration} s`),
-        el('span', {}, `${fmtTime(c.start)} → ${fmtTime(c.end)}`),
+        el('span', {}, c.full ? 'vidéo entière' : `${fmtTime(c.start)} → ${fmtTime(c.end)}`),
         el('a', { href: c.source_url, target: '_blank', rel: 'noopener', title: c.source_title || '' }, 'source ↗')),
       renderUsages(c),
       c.status === 'done' ? renderExports(c) : null,
@@ -703,6 +786,7 @@ let editing = null;
 function openEdit(c) {
   editing = c;
   $('#edit-title').value = c.title;
+  $('#edit-folder').value = c.folder_id || '';
   editTags.set(c.tags);
   $('#edit-dialog').showModal();
 }
@@ -711,14 +795,15 @@ $('#edit-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   if ($('#edit-tag-input').value.trim()) editTags.add($('#edit-tag-input').value);
   try {
-    await api(`/api/clips/${editing.id}`, { method: 'PUT', body: JSON.stringify({ title: $('#edit-title').value, tags: editTags.get() }) });
+    await api(`/api/clips/${editing.id}`, { method: 'PUT', body: JSON.stringify({ title: $('#edit-title').value, tags: editTags.get(), folder_id: Number($('#edit-folder').value) || null }) });
     $('#edit-dialog').close();
-    await refreshTags(); loadLibrary();
+    await refreshTags(); await refreshFolders(); loadLibrary();
   } catch (err) { alert(err.message); }
 });
 
 // ------------------------------------------------------------------ démarrage
 (async () => {
+  await refreshFolders();
   await refreshTags();
   // Reprend les clips en cours / récents dans la file
   const recent = await api('/api/clips');
